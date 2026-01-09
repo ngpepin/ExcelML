@@ -42,7 +42,7 @@ public static class DlFunctions
         var baseDir = GetTorchBaseDir();
 
         var path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-        if (!path.Split(';').Any(p => string.Equals(p, baseDir, StringComparison.OrdinalIgnoreCase)))
+        if (!path.Split(';').Any(p => string.Equals(p, baseDir, StringComparison.OrdinalIgnoreCase)));
         {
             Environment.SetEnvironmentVariable("PATH", baseDir + ";" + path);
         }
@@ -530,10 +530,8 @@ public static class DlFunctions
                         model.LastEpoch = e;
                         model.LastLoss = loss;
 
-                        if (e % 10 == 0)
-                        {
-                            QueueRecalcOnce("loss-progress", false);
-                        }
+                        // queue a recalc each epoch (throttled in QueueRecalcOnce)
+                        QueueRecalcOnce("loss-progress", false);
                         await Task.Delay(1).ConfigureAwait(false);
                     }
 
@@ -869,7 +867,7 @@ public static class DlFunctions
     private static Dictionary<string, Tensor> RunForwardActivations(DlModelState model, Tensor xTensor)
     {
         var activations = new Dictionary<string, Tensor>(StringComparer.OrdinalIgnoreCase);
-        var intermediates = new System.Collections.Generic.List<Tensor>();
+        var intermediates = new List<Tensor>();
         var current = xTensor;
 
         foreach (var layer in model.TorchModel.named_children())
@@ -1053,7 +1051,6 @@ public static class DlFunctions
 
     private static void SaveStateDict(IDictionary<string, Tensor> stateDict, string path)
     {
-        // TorchSharp 0.105 exposes torch.save for Tensor; use reflection to keep dictionary support if available.
         var saveMethod = typeof(torch).GetMethods(BindingFlags.Public | BindingFlags.Static)
             .FirstOrDefault(m => m.Name == "save" && m.GetParameters().Length == 2);
 
