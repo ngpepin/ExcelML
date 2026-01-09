@@ -125,7 +125,7 @@ public static class DlFunctions
         return missing;
     }
 
-    [ExcelFunction(Name = "DL.MODEL_CREATE", Description = "Create a model and return a model_id")]
+    [ExcelFunction(Name = "DL.MODEL_CREATE", Description = "Create a model and return a model_id" /* non-volatile */)]
     public static object ModelCreate(string description)
     {
         try
@@ -349,6 +349,61 @@ public static class DlFunctions
         }
     }
 
+    // Throttled recalc helper to avoid storms (no workbook-wide force)
+    private static volatile bool _recalcQueued;
+    private static volatile bool _recalcPending;
+    private static void QueueRecalcOnce(string reason, bool force)
+    {
+        if (_recalcQueued)
+        {
+            if (force)
+                _recalcPending = true;
+            return;
+        }
+
+        _recalcQueued = true;
+        try
+        {
+            ExcelAsyncUtil.QueueAsMacro(() =>
+            {
+                try
+                {
+                    XlCall.Excel(XlCall.xlcCalculateNow);
+                }
+                catch { }
+                finally
+                {
+                    _recalcQueued = false;
+                    if (_recalcPending)
+                    {
+                        _recalcPending = false;
+                        QueueRecalcOnce("pending", false);
+                    }
+                }
+            });
+        }
+        catch
+        {
+            _recalcQueued = false;
+        }
+    }
+
+    [ExcelFunction(Name = "DL.STATUS", Description = "Show training status for a model", IsVolatile = true)]
+    public static object Status(string model_id)
+    {
+        if (!DlRegistry.TryGet(model_id, out var model))
+            return "#MODEL! Unknown model_id";
+
+        return new object[,]
+        {
+            { "model", model_id },
+            { "status", model.IsTraining ? "training" : "idle" },
+            { "last_epoch", model.LastEpoch },
+            { "last_loss", double.IsNaN(model.LastLoss) ? "" : model.LastLoss.ToString("G6", CultureInfo.InvariantCulture) },
+            { "last_trigger", model.LastTriggerKey ?? "<null>" },
+            { "version", model.TrainingVersion }
+        };
+    }
 
     [ExcelFunction(Name = "DL.TRAIN", Description = "Train a model (triggered) and return summary")]
     public static object Train(string model_id, object[,] X, object[,] y, string opts, object trigger)
@@ -364,6 +419,17 @@ public static class DlFunctions
         {
             return new object[,] { { "skipped", "trigger unchanged (set trigger cell to a new value to retrain)" }, { "last", model.LastTriggerKey ?? "<null>" }, { "curr", key } };
         }
+
+        // Fast-path guard: if another training run is in-progress, return immediately instead of waiting (avoids long #N/A).
+        if (!model.TrainLock.Wait(0))
+        {
+            return new object[,]
+            {
+                { "busy", "training in progress" },
+                { "hint", "retry after current training completes" }
+            };
+        }
+        model.TrainLock.Release();
 
         var functionName = nameof(Train);
         var parameters = new object[] { model_id, opts ?? "", key };
@@ -383,11 +449,32 @@ public static class DlFunctions
 
                 int epochs = ParseIntOpt(opts, "epochs", 20);
                 double learningRate = ParseDoubleOpt(opts, "lr", 0.1);
+                bool resetModel = ParseBoolOpt(opts, "reset", false);
                 EnsureTorch();
 
                 if (model.TorchModel == null)
                 {
                     return "#ERR: model not initialized. Call DL.MODEL_CREATE first.";
+                }
+
+                model.IsTraining = true;
+                model.TrainingVersion++;
+                model.LastEpoch = 0;
+                model.LastLoss = double.NaN;
+
+                if (resetModel)
+                {
+                    if (model.Optimizer is IDisposable oldOpt)
+                    {
+                        oldOpt.Dispose();
+                    }
+
+                    model.TorchModel = BuildDefaultMlp(model.InputDim, model.HiddenDim, model.OutputDim);
+                    model.LossFn = torch.nn.BCEWithLogitsLoss();
+                    model.Optimizer = null;
+                    model.WeightSnapshot.Clear();
+                    model.GradSnapshot.Clear();
+                    model.LossHistory.Clear();
                 }
 
                 if (model.LossFn == null)
@@ -407,7 +494,7 @@ public static class DlFunctions
                     || !string.Equals(model.OptimizerName, optimizerName, StringComparison.OrdinalIgnoreCase)
                     || Math.Abs(model.LearningRate - learningRate) > 1e-12;
 
-                if (optimizerNeedsReset)
+                if (resetModel || optimizerNeedsReset)
                 {
                     if (model.Optimizer is IDisposable disposable)
                     {
@@ -440,6 +527,13 @@ public static class DlFunctions
                         }
 
                         model.LossHistory.Add((e, loss));
+                        model.LastEpoch = e;
+                        model.LastLoss = loss;
+
+                        if (e % 10 == 0)
+                        {
+                            QueueRecalcOnce("loss-progress", false);
+                        }
                         await Task.Delay(1).ConfigureAwait(false);
                     }
 
@@ -447,6 +541,8 @@ public static class DlFunctions
                 }
 
                 model.LastTriggerKey = key;
+                model.IsTraining = false;
+                QueueRecalcOnce("train-complete", true);
                 Log($"Train complete | model={model_id} | key set to {key} | epochs={epochs} | final_loss={loss}");
 
                 return new object[,]
@@ -458,12 +554,13 @@ public static class DlFunctions
             }
             finally
             {
+                model.IsTraining = false;
                 model.TrainLock.Release();
             }
         });
     }
 
-    [ExcelFunction(Name = "DL.LOSS_HISTORY", Description = "Spill epoch/loss history for a model")]
+    [ExcelFunction(Name = "DL.LOSS_HISTORY", Description = "Spill epoch/loss history for a model", IsVolatile = true)]
     public static object LossHistory(string model_id)
     {
         if (!DlRegistry.TryGet(model_id, out var model))
@@ -516,7 +613,7 @@ public static class DlFunctions
         }
     }
 
-    [ExcelFunction(Name = "DL.WEIGHTS", Description = "Inspect weights for a layer (spilled)")]
+    [ExcelFunction(Name = "DL.WEIGHTS", Description = "Inspect weights for a layer (spilled)", IsVolatile = true)]
     public static object Weights(string model_id, object layer)
     {
         if (!DlRegistry.TryGet(model_id, out var model))
@@ -532,7 +629,7 @@ public static class DlFunctions
         return BuildWeightMatrix(snapshot.Weight, snapshot.Bias);
     }
 
-    [ExcelFunction(Name = "DL.GRADS", Description = "Inspect gradients for a layer (spilled)")]
+    [ExcelFunction(Name = "DL.GRADS", Description = "Inspect gradients for a layer (spilled)", IsVolatile = true)]
     public static object Grads(string model_id, object layer)
     {
         if (!DlRegistry.TryGet(model_id, out var model))
@@ -548,7 +645,7 @@ public static class DlFunctions
         return BuildWeightMatrix(snapshot.Weight, snapshot.Bias);
     }
 
-    [ExcelFunction(Name = "DL.ACTIVATIONS", Description = "Inspect activations for a layer given X (spilled)")]
+    [ExcelFunction(Name = "DL.ACTIVATIONS", Description = "Inspect activations for a layer given X (spilled)", IsVolatile = true)]
     public static object Activations(string model_id, object[,] X, object layer)
     {
         if (!DlRegistry.TryGet(model_id, out var model))
@@ -625,6 +722,25 @@ public static class DlFunctions
             if (kv.Length == 2 && kv[0].Trim().Equals(key, StringComparison.OrdinalIgnoreCase))
             {
                 return kv[1].Trim();
+            }
+        }
+        return defaultValue;
+    }
+
+    private static bool ParseBoolOpt(string opts, string key, bool defaultValue)
+    {
+        if (string.IsNullOrWhiteSpace(opts)) return defaultValue;
+        var parts = opts.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries);
+        foreach (var p in parts)
+        {
+            var kv = p.Split('=');
+            if (kv.Length == 2 && kv[0].Trim().Equals(key, StringComparison.OrdinalIgnoreCase))
+            {
+                var v = kv[1].Trim();
+                if (string.Equals(v, "1") || string.Equals(v, "true", StringComparison.OrdinalIgnoreCase) || string.Equals(v, "yes", StringComparison.OrdinalIgnoreCase))
+                    return true;
+                if (string.Equals(v, "0") || string.Equals(v, "false", StringComparison.OrdinalIgnoreCase) || string.Equals(v, "no", StringComparison.OrdinalIgnoreCase))
+                    return false;
             }
         }
         return defaultValue;

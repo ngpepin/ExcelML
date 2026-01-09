@@ -21,6 +21,7 @@ This project is a **net48 Excel-DNA** add-in intended to become a learning-focus
 ### Functions
 - `DL.MODEL_CREATE(description) -> model_id`
 - `DL.TRAIN(model_id, X, y, opts, trigger) -> training summary (spilled)` with trigger guard (no-op if trigger unchanged)
+  - opts supports `epochs`, `lr`, `optim` (`adam`/`sgd`), and `reset=true` to reinitialize weights/optimizer before training
 - `DL.LOSS_HISTORY(model_id) -> {epoch, loss} (spilled)`
 - `DL.PREDICT(model_id, X) -> outputs (spilled)`
 - Inspection: `DL.WEIGHTS(model_id, layer)`, `DL.GRADS(model_id, layer)`, `DL.ACTIVATIONS(model_id, X, layer)`
@@ -75,14 +76,14 @@ This should reflect Z1’s value immediately.
 In `E4`:
 
 ```excel
-=DL.TRAIN(E2, A2:B4, C2:C4, "epochs=20", $Z$1)
+=DL.TRAIN(E2, A2:B4, C2:C4, "epochs=20,reset=true", $Z$1)
 ```
 
 Expected behavior:
 
 * First run with a new trigger: returns a summary like `{status, done; epochs, 20; final_loss, ...}`
 * Recalc without changing Z1: returns `skipped`/`trigger unchanged`
-* Change Z1: retrains
+* Change Z1: retrains (add `reset=true` if you want a fresh weight init each time)
 
 ### 6) View loss history
 

@@ -34,7 +34,7 @@ internal sealed class DlModelState
     public string Description { get; }
 
     // Trigger token to avoid re-training
-    public string LastTriggerKey { get; set; }  // <-- NEW
+    public string LastTriggerKey { get; set; }
 
     // Training lock to avoid concurrent training on same model
     public readonly SemaphoreSlim TrainLock = new SemaphoreSlim(1, 1);
@@ -56,10 +56,20 @@ internal sealed class DlModelState
     public int HiddenDim { get; set; }
     public int OutputDim { get; set; }
 
+    // Training state
+    public bool IsTraining { get; set; }
+    public long TrainingVersion { get; set; }
+    public int LastEpoch { get; set; }
+    public double LastLoss { get; set; }
+
     public DlModelState(string description)
     {
         Description = description;
-        LastTriggerKey = null;  // <-- NEW
+        LastTriggerKey = null;
+        IsTraining = false;
+        TrainingVersion = 0;
+        LastEpoch = 0;
+        LastLoss = double.NaN;
     }
 
     public void UpdateWeightSnapshot()
