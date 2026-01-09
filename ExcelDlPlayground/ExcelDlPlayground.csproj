@@ -32,6 +32,11 @@
 		<PackageReference Include="TorchSharp" Version="0.105.2" GeneratePathProperty="true" />
 	</ItemGroup>
 
+	<ItemGroup>
+		<Reference Include="System.IO.Compression" />
+		<Reference Include="Microsoft.CSharp" />
+	</ItemGroup>
+
 	<PropertyGroup>
 		<LibtorchPackageRoot>$(PkgLibtorch_cpu_win_x64)</LibtorchPackageRoot>
 		<TorchSharpCpuPackageRoot>$(PkgTorchSharp_cpu)</TorchSharpCpuPackageRoot>

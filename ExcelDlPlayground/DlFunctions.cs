@@ -13,6 +13,7 @@ using System.Runtime.InteropServices;
 using System.IO.Compression;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
+using TorchSharp.Modules;
 
 public static class DlFunctions
 {
@@ -209,7 +210,7 @@ public static class DlFunctions
             var metadataPath = Path.Combine(tempDir, "metadata.json");
 
             var stateDict = model.TorchModel.state_dict();
-            torch.save(stateDict, weightsPath);
+            SaveStateDict(stateDict, weightsPath);
             WriteMetadata(metadataPath, meta);
 
             var outputDir = Path.GetDirectoryName(fullPath);
@@ -312,7 +313,9 @@ public static class DlFunctions
             if (stateDict == null)
                 return "#ERR: invalid weights payload";
 
-            model.TorchModel.load_state_dict(stateDict);
+            var dict = stateDict as Dictionary<string, Tensor> ?? new Dictionary<string, Tensor>(stateDict);
+
+            model.TorchModel.load_state_dict(dict);
             model.LossHistory.Clear();
             if (meta.LossHistory != null)
             {
@@ -365,8 +368,8 @@ public static class DlFunctions
         var functionName = nameof(Train);
         var parameters = new object[] { model_id, opts ?? "", key };
 
-        return ExcelAsyncUtil.RunTask(functionName, parameters, async () =>
-        {
+        return ExcelAsyncUtil.RunTask<object>(functionName, parameters, async () =>
+         {
             await model.TrainLock.WaitAsync().ConfigureAwait(false);
             try
             {
@@ -427,8 +430,8 @@ public static class DlFunctions
                     for (int e = 1; e <= epochs; e++)
                     {
                         model.Optimizer.zero_grad();
-                        using (var output = model.TorchModel.forward(xTensor))
-                        using (var lossTensor = model.LossFn.forward(output, yTensor))
+                        using (var output = (Tensor)((dynamic)model.TorchModel).forward(xTensor))
+                        using (var lossTensor = (Tensor)((dynamic)model.LossFn).forward(output, yTensor))
                         {
                             lossTensor.backward();
                             model.UpdateGradSnapshot();
@@ -440,8 +443,8 @@ public static class DlFunctions
                         await Task.Delay(1).ConfigureAwait(false);
                     }
 
-                model.UpdateWeightSnapshot();
-            }
+                    model.UpdateWeightSnapshot();
+                }
 
                 model.LastTriggerKey = key;
                 Log($"Train complete | model={model_id} | key set to {key} | epochs={epochs} | final_loss={loss}");
@@ -500,7 +503,7 @@ public static class DlFunctions
             using (torch.no_grad())
             {
                 model.TorchModel.eval();
-                using (var output = model.TorchModel.forward(xTensor))
+                using (var output = (Tensor)((dynamic)model.TorchModel).forward(xTensor))
                 using (var outputCpu = output.detach().cpu())
                 {
                     return TensorToObjectArray(outputCpu);
@@ -738,7 +741,7 @@ public static class DlFunctions
 
         foreach (var layer in model.TorchModel.named_children())
         {
-            if (requireWeightedLayer && layer.module is not torch.nn.Linear)
+            if (requireWeightedLayer && !(layer.module is Linear))
                 continue;
 
             names.Add(layer.name);
@@ -755,7 +758,7 @@ public static class DlFunctions
 
         foreach (var layer in model.TorchModel.named_children())
         {
-            var output = layer.module.forward(current);
+            var output = (Tensor)((dynamic)layer.module).forward(current);
             intermediates.Add(output);
             activations[layer.name] = output.detach().clone().cpu();
             current = output;
@@ -806,7 +809,7 @@ public static class DlFunctions
 
     private static object BuildWeightMatrix(Tensor weight, Tensor bias)
     {
-        if (weight == null)
+        if (ReferenceEquals(weight, null))
             return "#ERR: missing weight tensor";
 
         var shape = weight.shape;
@@ -815,7 +818,7 @@ public static class DlFunctions
 
         int outDim = (int)shape[0];
         int inDim = (int)shape[1];
-        bool hasBias = bias != null;
+        bool hasBias = !ReferenceEquals(bias, null);
         int cols = inDim + 1 + (hasBias ? 1 : 0);
         var output = new object[outDim + 1, cols];
 
@@ -899,9 +902,12 @@ public static class DlFunctions
     private static torch.optim.Optimizer CreateOptimizer(DlModelState model)
     {
         var optimizerName = model.OptimizerName ?? "adam";
-        return optimizerName.Equals("sgd", StringComparison.OrdinalIgnoreCase)
-            ? torch.optim.SGD(model.TorchModel.parameters(), lr: model.LearningRate)
-            : torch.optim.Adam(model.TorchModel.parameters(), lr: model.LearningRate);
+        if (optimizerName.Equals("sgd", StringComparison.OrdinalIgnoreCase))
+        {
+            return torch.optim.SGD(model.TorchModel.parameters(), learningRate: model.LearningRate);
+        }
+
+        return torch.optim.Adam(model.TorchModel.parameters(), lr: model.LearningRate);
     }
 
     private static void AddFileToArchive(ZipArchive archive, string sourcePath, string entryName)
@@ -927,6 +933,22 @@ public static class DlFunctions
     {
         var serializer = new DataContractJsonSerializer(typeof(DlModelPersistence));
         return (DlModelPersistence)serializer.ReadObject(stream);
+    }
+
+    private static void SaveStateDict(IDictionary<string, Tensor> stateDict, string path)
+    {
+        // TorchSharp 0.105 exposes torch.save for Tensor; use reflection to keep dictionary support if available.
+        var saveMethod = typeof(torch).GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .FirstOrDefault(m => m.Name == "save" && m.GetParameters().Length == 2);
+
+        if (saveMethod != null)
+        {
+            saveMethod.Invoke(null, new object[] { stateDict, path });
+        }
+        else
+        {
+            throw new NotSupportedException("torch.save overload not found");
+        }
     }
 
     private static void Log(string message)

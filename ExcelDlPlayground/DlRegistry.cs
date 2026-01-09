@@ -5,6 +5,7 @@ using System.Threading;
 using TorchSharp;
 using static TorchSharp.torch;
 using TorchSharp.Modules;
+using System.Reflection;
 
 internal static class DlRegistry
 {
@@ -70,16 +71,17 @@ internal sealed class DlModelState
 
         foreach (var layer in TorchModel.named_children())
         {
-            if (layer.module is torch.nn.Linear linear)
+            var linear = layer.module as Linear;
+            if (linear == null)
+                continue;
+
+            var weight = linear.weight.detach().clone().cpu();
+            Tensor bias = null;
+            if (!ReferenceEquals(linear.bias, null))
             {
-                var weight = linear.weight.detach().clone().cpu();
-                Tensor bias = null;
-                if (linear.bias is not null)
-                {
-                    bias = linear.bias.detach().clone().cpu();
-                }
-                WeightSnapshot[layer.name] = new LayerTensorSnapshot(weight, bias);
+                bias = linear.bias.detach().clone().cpu();
             }
+            WeightSnapshot[layer.name] = new LayerTensorSnapshot(weight, bias);
         }
     }
 
@@ -92,22 +94,23 @@ internal sealed class DlModelState
 
         foreach (var layer in TorchModel.named_children())
         {
-            if (layer.module is torch.nn.Linear linear)
+            var linear = layer.module as Linear;
+            if (linear == null)
+                continue;
+
+            var weightGrad = GetGrad(linear.weight);
+            if (ReferenceEquals(weightGrad, null))
+                continue;
+
+            var weight = weightGrad.detach().clone().cpu();
+            Tensor bias = null;
+            var biasGrad = GetGrad(linear.bias);
+            if (!ReferenceEquals(biasGrad, null))
             {
-                var weightGrad = linear.weight.grad();
-                if (weightGrad is null)
-                    continue;
-
-                var weight = weightGrad.detach().clone().cpu();
-                Tensor bias = null;
-                var biasGrad = linear.bias?.grad();
-                if (biasGrad is not null)
-                {
-                    bias = biasGrad.detach().clone().cpu();
-                }
-
-                GradSnapshot[layer.name] = new LayerTensorSnapshot(weight, bias);
+                bias = biasGrad.detach().clone().cpu();
             }
+
+            GradSnapshot[layer.name] = new LayerTensorSnapshot(weight, bias);
         }
     }
 
@@ -132,6 +135,23 @@ internal sealed class DlModelState
             entry.Value.Dispose();
         }
         snapshots.Clear();
+    }
+
+    private static Tensor GetGrad(Tensor parameter)
+    {
+        if (ReferenceEquals(parameter, null))
+            return null;
+
+        var type = parameter.GetType();
+        var prop = type.GetProperty("grad");
+        if (prop != null)
+            return prop.GetValue(parameter) as Tensor;
+
+        var method = type.GetMethod("grad", Type.EmptyTypes);
+        if (method != null)
+            return method.Invoke(parameter, null) as Tensor;
+
+        return null;
     }
 }
 
