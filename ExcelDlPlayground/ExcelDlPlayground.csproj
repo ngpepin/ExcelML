@@ -38,12 +38,12 @@
 
 	<Target Name="CopyTorchNativeBinaries" AfterTargets="Build">
 		<ItemGroup>
-			<TorchNative Include="$(RestorePackagesPath)\libtorch-cpu-win-x64\**\runtimes\win-x64\native\*.dll" />
-			<TorchNative Include="$(RestorePackagesPath)\torchsharp-cpu\**\runtimes\win-x64\native\*.dll" />
-			<TorchNative Include="$(RestorePackagesPath)\torchsharp\**\runtimes\win-x64\native\*.dll" />
+			<TorchNative Include="$(NuGetPackageRoot)libtorch-cpu-win-x64\2.7.1\runtimes\win-x64\native\*.dll" />
+			<TorchNative Include="$(NuGetPackageRoot)torchsharp\0.105.2\runtimes\win-x64\native\*.dll" />
 		</ItemGroup>
-		<Message Importance="High" Text="CopyTorchNativeBinaries -> @(TorchNative)" />
-		<Copy SourceFiles="@(TorchNative)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" Condition="@(TorchNative) != ''" />
+
+		<Message Importance="High" Text="CopyTorchNativeBinaries -> $(TargetDir)" />
+		<Copy SourceFiles="@(TorchNative)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
 	</Target>
 
 </Project>
