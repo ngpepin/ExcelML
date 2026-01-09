@@ -6,9 +6,9 @@
 
 ## Vision
 
-**ExcelML** is an experimental platform that brings *real* machine learning and deep learning workflows directly into Microsoft Excel — without Python, Jupyter, or external services.
+**ExcelML** is an experimental platform that brings *real* machine learning and deep learning workflows directly into Microsoft Excel — without Python, Jupyter, or external services.  We are developing an Excel-based environment to familiarize our clients and business partners with basic ML concepts in the most approachable way we can think of.  For the moment we're limiting ourselves to core ML concepts, but we plan to eventually extend it to LLM's as well.
 
-The core idea is simple but ambitious:
+The key idea is simple but ambitious:
 
 > *If someone understands Excel formulas, ranges, and tables, they should be able to learn and experiment with modern ML concepts using those same mental models.*
 
@@ -167,10 +167,10 @@ It is *not* aimed at:
 
 To set expectations clearly:
 
-* ❌ Not AutoML
-* ❌ Not a replacement for Python notebooks
-* ❌ Not optimized for large datasets
-* ❌ Not a production inference engine
+* Not AutoML
+* Not a replacement for Python notebooks
+* Not optimized for large datasets
+* Not a production inference engine
 
 ExcelML values **clarity over speed**, **learning over scale**.
 
@@ -237,4 +237,3 @@ ExcelML is our attempt to find out.
 
 ---
 
-*ExcelML is a learning tool. Curiosity encouraged.*
