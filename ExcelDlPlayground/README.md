@@ -20,6 +20,8 @@ This project is a **net48 Excel-DNA** add-in intended to become a learning-focus
 - `DL.MODEL_CREATE(description) -> model_id`
 - `DL.TRAIN(model_id, X, y, opts, trigger) -> training summary (spilled)`
 - `DL.LOSS_HISTORY(model_id) -> {epoch, loss} (spilled)`
+- `DL.SAVE(model_id, path) -> save confirmation`
+- `DL.LOAD(path) -> model_id`
 - `DL.TRIGGER_KEY(trigger) -> debug normalized trigger key`
 - `WaitAsync(ms) -> timestamp` (async plumbing test)
 - Misc helpers (e.g., `SayHello`, `MatMul`) depending on the project state
@@ -103,6 +105,23 @@ epoch | loss
 ...
 ```
 
+### 7) Save and reload a model
+
+Save after training:
+
+```excel
+=DL.SAVE(E2, "C:\Temp\xor-model.dlzip")
+```
+
+Reload later (returns the same `model_id` stored in the file):
+
+```excel
+=DL.LOAD("C:\Temp\xor-model.dlzip")
+```
+
+You can then pass the returned model id back into `DL.PREDICT`, `DL.TRAIN`, or `DL.LOSS_HISTORY`.
+The save file is a small custom zip package containing `metadata.json` plus a TorchSharp `state_dict` blob.
+
 ---
 
 ## TorchSharp setup (current)
@@ -139,7 +158,6 @@ Trigger guard now works; TorchSharp init fixed via native copy/preload. If you s
    * `DL.WEIGHTS(model_id, layer)`
    * `DL.ACTIVATIONS(model_id, X, layer)`
    * `DL.GRADS(model_id, layer)`
-4. Add a model persistence option (save/load).
 
 ---
 

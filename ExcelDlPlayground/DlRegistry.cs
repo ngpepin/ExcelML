@@ -21,6 +21,11 @@ internal static class DlRegistry
 
     public static bool TryGet(string modelId, out DlModelState state) =>
         _models.TryGetValue(modelId, out state);
+
+    public static void Upsert(string modelId, DlModelState state)
+    {
+        _models[modelId] = state;
+    }
 }
 
 internal sealed class DlModelState
