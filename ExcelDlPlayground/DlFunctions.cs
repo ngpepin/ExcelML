@@ -14,6 +14,7 @@ using System.Runtime.InteropServices;
 public static class DlFunctions
 {
     private static bool _torchInitialized;
+    private static readonly string[] TorchNativeFiles = { "LibTorchSharp.dll", "torch_cpu.dll" };
 
     private static string LogPathSafe
     {
@@ -34,16 +35,7 @@ public static class DlFunctions
     {
         if (_torchInitialized) return;
 
-        string baseDir = null;
-        try
-        {
-            var loc = Assembly.GetExecutingAssembly().Location;
-            if (!string.IsNullOrWhiteSpace(loc))
-                baseDir = Path.GetDirectoryName(loc);
-        }
-        catch { }
-        if (string.IsNullOrWhiteSpace(baseDir))
-            baseDir = AppDomain.CurrentDomain.BaseDirectory;
+        var baseDir = GetTorchBaseDir();
 
         var path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
         if (!path.Split(';').Any(p => string.Equals(p, baseDir, StringComparison.OrdinalIgnoreCase)))
@@ -97,6 +89,36 @@ public static class DlFunctions
         {
             Log($"EnsureTorch: torch_cpu.dll not found in {baseDir}");
         }
+    }
+
+    private static string GetTorchBaseDir()
+    {
+        string baseDir = null;
+        try
+        {
+            var loc = Assembly.GetExecutingAssembly().Location;
+            if (!string.IsNullOrWhiteSpace(loc))
+                baseDir = Path.GetDirectoryName(loc);
+        }
+        catch { }
+        if (string.IsNullOrWhiteSpace(baseDir))
+            baseDir = AppDomain.CurrentDomain.BaseDirectory;
+
+        return baseDir;
+    }
+
+    private static List<string> GetMissingTorchNativeFiles(string baseDir)
+    {
+        var missing = new List<string>();
+        foreach (var file in TorchNativeFiles)
+        {
+            if (!File.Exists(Path.Combine(baseDir, file)))
+            {
+                missing.Add(file);
+            }
+        }
+
+        return missing;
     }
 
     [ExcelFunction(Name = "DL.MODEL_CREATE", Description = "Create a model and return a model_id")]
@@ -739,6 +761,13 @@ public static class DlFunctions
     {
         try
         {
+            var baseDir = GetTorchBaseDir();
+            var missing = GetMissingTorchNativeFiles(baseDir);
+            if (missing.Count > 0)
+            {
+                return "torch native missing: " + string.Join(", ", missing) + " | dir=" + baseDir;
+            }
+
             EnsureTorch();
             using (var t = torch.ones(new long[] { 1 }))
                 return "torch ok: " + t.ToString();
@@ -747,6 +776,19 @@ public static class DlFunctions
         {
             return ex.ToString();
         }
+    }
+
+    [ExcelFunction(Name = "DL.TORCH_NATIVE_CHECK", Description = "Debug: list missing torch native DLLs")]
+    public static string TorchNativeCheck()
+    {
+        var baseDir = GetTorchBaseDir();
+        var missing = GetMissingTorchNativeFiles(baseDir);
+        if (missing.Count == 0)
+        {
+            return "torch native ok: " + string.Join(", ", TorchNativeFiles) + " | dir=" + baseDir;
+        }
+
+        return "torch native missing: " + string.Join(", ", missing) + " | dir=" + baseDir;
     }
 
     [DllImport("kernel32", SetLastError = true, CharSet = CharSet.Auto)]

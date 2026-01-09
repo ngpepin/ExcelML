@@ -29,17 +29,20 @@
 		<!-- Add the backend explicitly (matches the error you saw) -->
 		<PackageReference Include="libtorch-cpu-win-x64" Version="2.7.1.0" GeneratePathProperty="true" />
 		<PackageReference Include="TorchSharp-cpu" Version="0.105.2" GeneratePathProperty="true" />
+		<PackageReference Include="TorchSharp" Version="0.105.2" GeneratePathProperty="true" />
 	</ItemGroup>
 
 	<PropertyGroup>
 		<LibtorchPackageRoot>$(PkgLibtorch_cpu_win_x64)</LibtorchPackageRoot>
 		<TorchSharpCpuPackageRoot>$(PkgTorchSharp_cpu)</TorchSharpCpuPackageRoot>
+		<TorchSharpPackageRoot>$(PkgTorchSharp)</TorchSharpPackageRoot>
 	</PropertyGroup>
 
 	<Target Name="CopyTorchNativeBinaries" AfterTargets="Build">
 		<ItemGroup>
-			<TorchNative Include="$(NuGetPackageRoot)libtorch-cpu-win-x64\2.7.1\runtimes\win-x64\native\*.dll" />
-			<TorchNative Include="$(NuGetPackageRoot)torchsharp\0.105.2\runtimes\win-x64\native\*.dll" />
+			<TorchNative Include="$(LibtorchPackageRoot)\runtimes\win-x64\native\*.dll" />
+			<TorchNative Include="$(TorchSharpCpuPackageRoot)\runtimes\win-x64\native\*.dll" />
+			<TorchNative Include="$(TorchSharpPackageRoot)\runtimes\win-x64\native\*.dll" />
 		</ItemGroup>
 
 		<Message Importance="High" Text="CopyTorchNativeBinaries -> $(TargetDir)" />

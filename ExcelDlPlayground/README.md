@@ -1,6 +1,6 @@
 # README.md
 
-## ExcelDlPlayground ó Excel-DNA net48 scaffold for DL-in-Excel
+## ExcelDlPlayground ‚Äî Excel-DNA net48 scaffold for DL-in-Excel
 
 This project is a **net48 Excel-DNA** add-in intended to become a learning-focused deep learning playground inside Excel using:
 - dynamic arrays (spill)
@@ -15,7 +15,7 @@ This project is a **net48 Excel-DNA** add-in intended to become a learning-focus
 
 ---
 
-## Whatís implemented (scaffold)
+## What‚Äôs implemented (scaffold)
 ### Functions
 - `DL.MODEL_CREATE(description) -> model_id`
 - `DL.TRAIN(model_id, X, y, opts, trigger) -> training summary (spilled)`
@@ -25,7 +25,7 @@ This project is a **net48 Excel-DNA** add-in intended to become a learning-focus
 - Misc helpers (e.g., `SayHello`, `MatMul`) depending on the project state
 
 ### Ribbon
-A simple ìDeep Learningî tab implemented via Excel-DNA Ribbon XML.
+A simple ‚ÄúDeep Learning‚Äù tab implemented via Excel-DNA Ribbon XML.
 
 ---
 
@@ -70,7 +70,7 @@ In `AA1`:
 =DL.TRIGGER_KEY($Z$1)
 ```
 
-This should reflect Z1ís value immediately.
+This should reflect Z1‚Äôs value immediately.
 
 ### 5) Train
 
@@ -108,9 +108,9 @@ epoch | loss
 ## TorchSharp setup (current)
 
 - Packages: `TorchSharp-cpu` 0.105.2, `libtorch-cpu-win-x64` 2.7.1.0
-- Natives (`torch_cpu.dll`, `LibTorchSharp.dll`, etc.) are copied from `%USERPROFILE%\.nuget\packages` into `bin\Debug\net48` via the csproj target `CopyTorchNativeBinaries`.
+- Natives (`torch_cpu.dll`, `LibTorchSharp.dll`, etc.) are copied from the NuGet package roots into `bin\Debug\net48` via the csproj target `CopyTorchNativeBinaries` (libtorch-cpu-win-x64, torchsharp-cpu, torchsharp runtimes).
 - `EnsureTorch()` sets `PATH`/`TORCHSHARP_HOME` and preloads `LibTorchSharp.dll` then `torch_cpu.dll`.
-- Debug UDFs: `DL.TORCH_TEST`, `DL.TORCH_TEST_DETAIL` show init status.
+- Debug UDFs: `DL.TORCH_TEST`, `DL.TORCH_TEST_DETAIL` show init status; `DL.TORCH_NATIVE_CHECK` reports missing native DLLs.
 
 ---
 
@@ -133,7 +133,7 @@ Trigger guard now works; TorchSharp init fixed via native copy/preload. If you s
 
 ## Next milestones (after trigger fix)
 
-1. Replace placeholder ìfake trainingî with TorchSharp CPU MLP (e.g., XOR).
+1. Replace placeholder ‚Äúfake training‚Äù with TorchSharp CPU MLP (e.g., XOR).
 2. Add `DL.PREDICT(model_id, X)` for batched inference (spilled).
 3. Add inspection functions for learning:
    * `DL.WEIGHTS(model_id, layer)`

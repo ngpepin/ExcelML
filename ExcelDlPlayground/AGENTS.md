@@ -20,9 +20,9 @@
 ### TorchSharp gotchas (solved)
 - Needed both `torch_cpu.dll` and `LibTorchSharp.dll` beside `TorchSharp.dll`.
 - csproj `CopyTorchNativeBinaries` globs natives from:
-  - `%USERPROFILE%\.nuget\packages\libtorch-cpu-win-x64\**\runtimes\win-x64\native\*.dll`
-  - `%USERPROFILE%\.nuget\packages\torchsharp-cpu\**\runtimes\win-x64\native\*.dll`
-  - `%USERPROFILE%\.nuget\packages\torchsharp\**\runtimes\win-x64\native\*.dll`
+  - `$(PkgLibtorch_cpu_win_x64)\runtimes\win-x64\native\*.dll`
+  - `$(PkgTorchSharp_cpu)\runtimes\win-x64\native\*.dll`
+  - `$(PkgTorchSharp)\runtimes\win-x64\native\*.dll`
 - `EnsureTorch()` sets PATH + TORCHSHARP_HOME to output folder, preloads `LibTorchSharp.dll` then `torch_cpu.dll` via LoadLibrary.
 - If `TypeInitializationException` reappears: confirm those DLLs exist in output, rerun restore/build with `-r win-x64`, reload XLL.
 - If upgrading TorchSharp, verify native package versions explicitly — transitive resolution is unreliable under net48 + Excel.
@@ -39,7 +39,7 @@
 - E8: `=DL.LOSS_HISTORY(E2)`
 
 ### Debug helpers
-- Torch: `DL.TORCH_TEST`, `DL.TORCH_TEST_DETAIL`
+- Torch: `DL.TORCH_TEST`, `DL.TORCH_TEST_DETAIL`, `DL.TORCH_NATIVE_CHECK` (reports missing native DLLs)
 - Logging: `DL.LOG_PATH`, `DL.LOG_WRITE_TEST`; log at `bin\Debug\net48\ExcelDlPlayground.log` (fallback `%TEMP%`).
 
 ### Solution/config gotcha
@@ -82,4 +82,3 @@ TorchSharp now initializes successfully after adding native copy + preload (see 
 - **Skipping `EnsureTorch()` preload**: TorchSharp may not find `LibTorchSharp.dll`/`torch_cpu.dll` even if present; preload sets PATH/TORCHSHARP_HOME and LoadLibrary order.
 - **Trigger-based training without changing trigger cell**: `DL.TRAIN` will intentionally return `skipped` if trigger unchanged.
 - **Using Debug config with x64 solution mappings that don’t exist**: leads to “project configuration does not exist” warnings; use Any CPU configs as documented.
-
