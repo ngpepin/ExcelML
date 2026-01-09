@@ -131,7 +131,9 @@ public static class DlFunctions
 
             model.TorchModel = net;
             model.LossFn = torch.nn.BCEWithLogitsLoss(); // good default for XOR
-            model.Optimizer = torch.optim.Adam(model.TorchModel.parameters(), lr: 0.1);
+            model.OptimizerName = "adam";
+            model.LearningRate = 0.1;
+            model.Optimizer = torch.optim.Adam(model.TorchModel.parameters(), lr: model.LearningRate);
 
             Log($"ModelCreate | desc={description ?? "<null>"} | id={id} | in={input} hidden={hidden} out={output}");
             return id;
@@ -176,14 +178,69 @@ public static class DlFunctions
                 }
 
                 int epochs = ParseIntOpt(opts, "epochs", 20);
-                model.LossHistory.Clear();
-                double loss = 1.0;
+                double learningRate = ParseDoubleOpt(opts, "lr", 0.1);
+                EnsureTorch();
 
-                for (int e = 1; e <= epochs; e++)
+                if (model.TorchModel == null)
                 {
-                    loss *= 0.92;
-                    model.LossHistory.Add((e, loss));
-                    await Task.Delay(10).ConfigureAwait(false);
+                    return "#ERR: model not initialized. Call DL.MODEL_CREATE first.";
+                }
+
+                if (model.LossFn == null)
+                {
+                    model.LossFn = torch.nn.BCEWithLogitsLoss();
+                }
+
+                var optimizerName = ParseStringOpt(opts, "optim", model.OptimizerName ?? "adam");
+                if (string.IsNullOrWhiteSpace(optimizerName))
+                    optimizerName = "adam";
+                optimizerName = optimizerName.Trim().ToLowerInvariant();
+
+                if (optimizerName != "adam" && optimizerName != "sgd")
+                    return $"#ERR: unsupported optimizer '{optimizerName}'. Use optim=adam or optim=sgd.";
+
+                bool optimizerNeedsReset = model.Optimizer == null
+                    || !string.Equals(model.OptimizerName, optimizerName, StringComparison.OrdinalIgnoreCase)
+                    || Math.Abs(model.LearningRate - learningRate) > 1e-12;
+
+                if (optimizerNeedsReset)
+                {
+                    if (model.Optimizer is IDisposable disposable)
+                    {
+                        disposable.Dispose();
+                    }
+
+                    model.OptimizerName = optimizerName;
+                    model.LearningRate = learningRate;
+                    model.Optimizer = optimizerName == "sgd"
+                        ? torch.optim.SGD(model.TorchModel.parameters(), lr: learningRate)
+                        : torch.optim.Adam(model.TorchModel.parameters(), lr: learningRate);
+                }
+
+                model.LossHistory.Clear();
+                double loss = 0.0;
+
+                using (var xTensor = BuildTensorFromRange(X, model.InputDim, "X"))
+                using (var yTensor = BuildTensorFromRange(y, model.OutputDim, "y"))
+                {
+                    model.TorchModel.train();
+
+                    for (int e = 1; e <= epochs; e++)
+                    {
+                        model.Optimizer.zero_grad();
+                        using (var output = model.TorchModel.forward(xTensor))
+                        using (var lossTensor = model.LossFn.forward(output, yTensor))
+                        {
+                            lossTensor.backward();
+                            model.Optimizer.step();
+                            loss = lossTensor.ToSingle();
+                        }
+
+                        model.LossHistory.Add((e, loss));
+                        await Task.Delay(1).ConfigureAwait(false);
+                    }
+
+                    model.UpdateWeightSnapshot();
                 }
 
                 model.LastTriggerKey = key;
@@ -239,6 +296,86 @@ public static class DlFunctions
             }
         }
         return defaultValue;
+    }
+
+    private static double ParseDoubleOpt(string opts, string key, double defaultValue)
+    {
+        if (string.IsNullOrWhiteSpace(opts)) return defaultValue;
+        var parts = opts.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries);
+        foreach (var p in parts)
+        {
+            var kv = p.Split('=');
+            if (kv.Length == 2 && kv[0].Trim().Equals(key, StringComparison.OrdinalIgnoreCase))
+            {
+                if (double.TryParse(kv[1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var v))
+                    return v;
+            }
+        }
+        return defaultValue;
+    }
+
+    private static string ParseStringOpt(string opts, string key, string defaultValue)
+    {
+        if (string.IsNullOrWhiteSpace(opts)) return defaultValue;
+        var parts = opts.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries);
+        foreach (var p in parts)
+        {
+            var kv = p.Split('=');
+            if (kv.Length == 2 && kv[0].Trim().Equals(key, StringComparison.OrdinalIgnoreCase))
+            {
+                return kv[1].Trim();
+            }
+        }
+        return defaultValue;
+    }
+
+    private static Tensor BuildTensorFromRange(object[,] values, int expectedCols, string label)
+    {
+        if (values == null)
+            throw new ArgumentException($"Range {label} is null");
+
+        int rows = values.GetLength(0);
+        int cols = values.GetLength(1);
+
+        if (expectedCols > 0 && cols != expectedCols)
+            throw new ArgumentException($"Range {label} must have {expectedCols} columns, got {cols}");
+
+        var data = new float[rows * cols];
+        int idx = 0;
+        for (int r = 0; r < rows; r++)
+        {
+            for (int c = 0; c < cols; c++)
+            {
+                var cell = values[r, c];
+                if (cell == null || cell is ExcelEmpty || cell is ExcelMissing)
+                {
+                    data[idx++] = 0f;
+                    continue;
+                }
+
+                if (cell is double d)
+                {
+                    data[idx++] = (float)d;
+                    continue;
+                }
+
+                if (cell is float f)
+                {
+                    data[idx++] = f;
+                    continue;
+                }
+
+                if (double.TryParse(cell.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed))
+                {
+                    data[idx++] = (float)parsed;
+                    continue;
+                }
+
+                throw new ArgumentException($"Range {label} contains non-numeric value at ({r + 1},{c + 1})");
+            }
+        }
+
+        return torch.tensor(data, new long[] { rows, cols }, dtype: ScalarType.Float32);
     }
 
     private static string TriggerKey(object trigger)
@@ -325,4 +462,3 @@ public static class DlFunctions
     [DllImport("kernel32", SetLastError = true, CharSet = CharSet.Auto)]
     private static extern IntPtr LoadLibrary(string lpFileName);
 }
-

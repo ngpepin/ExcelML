@@ -40,6 +40,9 @@ internal sealed class DlModelState
     public torch.nn.Module TorchModel { get; set; }
     public torch.optim.Optimizer Optimizer { get; set; }
     public torch.nn.Module LossFn { get; set; }
+    public readonly List<Tensor> WeightSnapshot = new List<Tensor>();
+    public string OptimizerName { get; set; }
+    public double LearningRate { get; set; }
     public int InputDim { get; set; }
     public int HiddenDim { get; set; }
     public int OutputDim { get; set; }
@@ -49,5 +52,21 @@ internal sealed class DlModelState
         Description = description;
         LastTriggerKey = null;  // <-- NEW
     }
-}
 
+    public void UpdateWeightSnapshot()
+    {
+        foreach (var t in WeightSnapshot)
+        {
+            t.Dispose();
+        }
+        WeightSnapshot.Clear();
+
+        if (TorchModel == null)
+            return;
+
+        foreach (var p in TorchModel.parameters())
+        {
+            WeightSnapshot.Add(p.detach().clone().cpu());
+        }
+    }
+}
