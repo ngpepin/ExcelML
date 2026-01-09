@@ -1,5 +1,6 @@
 ﻿using ExcelDna.Integration;
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -232,6 +233,7 @@ public static class DlFunctions
                         using (var lossTensor = model.LossFn.forward(output, yTensor))
                         {
                             lossTensor.backward();
+                            model.UpdateGradSnapshot();
                             model.Optimizer.step();
                             loss = lossTensor.ToSingle();
                         }
@@ -240,8 +242,8 @@ public static class DlFunctions
                         await Task.Delay(1).ConfigureAwait(false);
                     }
 
-                    model.UpdateWeightSnapshot();
-                }
+                model.UpdateWeightSnapshot();
+            }
 
                 model.LastTriggerKey = key;
                 Log($"Train complete | model={model_id} | key set to {key} | epochs={epochs} | final_loss={loss}");
@@ -280,6 +282,104 @@ public static class DlFunctions
             output[i + 1, 1] = model.LossHistory[i].loss;
         }
         return output;
+    }
+
+    [ExcelFunction(Name = "DL.PREDICT", Description = "Predict outputs for X (spilled)")]
+    public static object Predict(string model_id, object[,] X)
+    {
+        if (!DlRegistry.TryGet(model_id, out var model))
+            return "#MODEL! Unknown model_id";
+
+        if (model.TorchModel == null)
+            return "#ERR: model not initialized. Call DL.MODEL_CREATE first.";
+
+        EnsureTorch();
+
+        model.TrainLock.Wait();
+        try
+        {
+            using (var xTensor = BuildTensorFromRange(X, model.InputDim, "X"))
+            using (torch.no_grad())
+            {
+                model.TorchModel.eval();
+                using (var output = model.TorchModel.forward(xTensor))
+                using (var outputCpu = output.detach().cpu())
+                {
+                    return TensorToObjectArray(outputCpu);
+                }
+            }
+        }
+        finally
+        {
+            model.TrainLock.Release();
+        }
+    }
+
+    [ExcelFunction(Name = "DL.WEIGHTS", Description = "Inspect weights for a layer (spilled)")]
+    public static object Weights(string model_id, object layer)
+    {
+        if (!DlRegistry.TryGet(model_id, out var model))
+            return "#MODEL! Unknown model_id";
+
+        var layerName = ResolveLayerName(model, layer, requireWeightedLayer: true, out var error);
+        if (error != null)
+            return error;
+
+        if (!model.WeightSnapshot.TryGetValue(layerName, out var snapshot))
+            return "#ERR: no weight snapshot. Train the model first.";
+
+        return BuildWeightMatrix(snapshot.Weight, snapshot.Bias);
+    }
+
+    [ExcelFunction(Name = "DL.GRADS", Description = "Inspect gradients for a layer (spilled)")]
+    public static object Grads(string model_id, object layer)
+    {
+        if (!DlRegistry.TryGet(model_id, out var model))
+            return "#MODEL! Unknown model_id";
+
+        var layerName = ResolveLayerName(model, layer, requireWeightedLayer: true, out var error);
+        if (error != null)
+            return error;
+
+        if (!model.GradSnapshot.TryGetValue(layerName, out var snapshot))
+            return "#ERR: no gradient snapshot. Train the model first.";
+
+        return BuildWeightMatrix(snapshot.Weight, snapshot.Bias);
+    }
+
+    [ExcelFunction(Name = "DL.ACTIVATIONS", Description = "Inspect activations for a layer given X (spilled)")]
+    public static object Activations(string model_id, object[,] X, object layer)
+    {
+        if (!DlRegistry.TryGet(model_id, out var model))
+            return "#MODEL! Unknown model_id";
+
+        if (model.TorchModel == null)
+            return "#ERR: model not initialized. Call DL.MODEL_CREATE first.";
+
+        var layerName = ResolveLayerName(model, layer, requireWeightedLayer: false, out var error);
+        if (error != null)
+            return error;
+
+        EnsureTorch();
+
+        model.TrainLock.Wait();
+        try
+        {
+            using (var xTensor = BuildTensorFromRange(X, model.InputDim, "X"))
+            using (torch.no_grad())
+            {
+                var activations = RunForwardActivations(model, xTensor);
+                model.UpdateActivationSnapshot(activations);
+                if (!activations.TryGetValue(layerName, out var activation))
+                    return "#ERR: layer not found";
+
+                return TensorToObjectArray(activation);
+            }
+        }
+        finally
+        {
+            model.TrainLock.Release();
+        }
     }
 
     private static int ParseIntOpt(string opts, string key, int defaultValue)
@@ -376,6 +476,196 @@ public static class DlFunctions
         }
 
         return torch.tensor(data, new long[] { rows, cols }, dtype: ScalarType.Float32);
+    }
+
+    private static string ResolveLayerName(DlModelState model, object layer, bool requireWeightedLayer, out string error)
+    {
+        error = null;
+        var normalized = NormalizeScalar(layer);
+        var layers = GetLayerNames(model, requireWeightedLayer);
+
+        if (layers.Count == 0)
+        {
+            error = "#ERR: model has no layers";
+            return null;
+        }
+
+        if (normalized is double d)
+        {
+            int index = (int)d;
+            if (Math.Abs(d - index) > 1e-9)
+            {
+                error = "#ERR: layer index must be an integer";
+                return null;
+            }
+
+            if (index < 1 || index > layers.Count)
+            {
+                error = $"#ERR: layer index out of range (1-{layers.Count})";
+                return null;
+            }
+
+            return layers[index - 1];
+        }
+
+        if (normalized is int i)
+        {
+            if (i < 1 || i > layers.Count)
+            {
+                error = $"#ERR: layer index out of range (1-{layers.Count})";
+                return null;
+            }
+
+            return layers[i - 1];
+        }
+
+        if (normalized is string s && !string.IsNullOrWhiteSpace(s))
+        {
+            if (layers.Any(name => name.Equals(s, StringComparison.OrdinalIgnoreCase)))
+                return layers.First(name => name.Equals(s, StringComparison.OrdinalIgnoreCase));
+
+            error = "#ERR: unknown layer name";
+            return null;
+        }
+
+        error = "#ERR: invalid layer";
+        return null;
+    }
+
+    private static List<string> GetLayerNames(DlModelState model, bool requireWeightedLayer)
+    {
+        var names = new List<string>();
+        if (model.TorchModel == null)
+            return names;
+
+        foreach (var layer in model.TorchModel.named_children())
+        {
+            if (requireWeightedLayer && layer.module is not torch.nn.Linear)
+                continue;
+
+            names.Add(layer.name);
+        }
+
+        return names;
+    }
+
+    private static Dictionary<string, Tensor> RunForwardActivations(DlModelState model, Tensor xTensor)
+    {
+        var activations = new Dictionary<string, Tensor>(StringComparer.OrdinalIgnoreCase);
+        var intermediates = new System.Collections.Generic.List<Tensor>();
+        var current = xTensor;
+
+        foreach (var layer in model.TorchModel.named_children())
+        {
+            var output = layer.module.forward(current);
+            intermediates.Add(output);
+            activations[layer.name] = output.detach().clone().cpu();
+            current = output;
+        }
+
+        foreach (var tensor in intermediates)
+        {
+            tensor.Dispose();
+        }
+
+        return activations;
+    }
+
+    private static object TensorToObjectArray(Tensor tensor)
+    {
+        var shape = tensor.shape;
+        int rows;
+        int cols;
+
+        if (shape.Length == 1)
+        {
+            rows = 1;
+            cols = (int)shape[0];
+        }
+        else if (shape.Length == 2)
+        {
+            rows = (int)shape[0];
+            cols = (int)shape[1];
+        }
+        else
+        {
+            return $"#ERR: tensor rank {shape.Length} unsupported";
+        }
+
+        var data = tensor.data<float>().ToArray();
+        var output = new object[rows, cols];
+        int idx = 0;
+        for (int r = 0; r < rows; r++)
+        {
+            for (int c = 0; c < cols; c++)
+            {
+                output[r, c] = data[idx++];
+            }
+        }
+
+        return output;
+    }
+
+    private static object BuildWeightMatrix(Tensor weight, Tensor bias)
+    {
+        if (weight == null)
+            return "#ERR: missing weight tensor";
+
+        var shape = weight.shape;
+        if (shape.Length != 2)
+            return "#ERR: weight tensor must be 2D";
+
+        int outDim = (int)shape[0];
+        int inDim = (int)shape[1];
+        bool hasBias = bias != null;
+        int cols = inDim + 1 + (hasBias ? 1 : 0);
+        var output = new object[outDim + 1, cols];
+
+        output[0, 0] = "";
+        for (int c = 0; c < inDim; c++)
+        {
+            output[0, c + 1] = $"in{c + 1}";
+        }
+        if (hasBias)
+            output[0, inDim + 1] = "bias";
+
+        var weightData = weight.data<float>().ToArray();
+        float[] biasData = null;
+        if (hasBias)
+            biasData = bias.data<float>().ToArray();
+
+        int idx = 0;
+        for (int r = 0; r < outDim; r++)
+        {
+            output[r + 1, 0] = $"out{r + 1}";
+            for (int c = 0; c < inDim; c++)
+            {
+                output[r + 1, c + 1] = weightData[idx++];
+            }
+            if (hasBias)
+            {
+                output[r + 1, inDim + 1] = biasData?[r];
+            }
+        }
+
+        return output;
+    }
+
+    private static object NormalizeScalar(object value)
+    {
+        if (value is ExcelReference xref)
+        {
+            var v = XlCall.Excel(XlCall.xlCoerce, xref);
+            return NormalizeScalar(v);
+        }
+
+        if (value is object[,] arr && arr.GetLength(0) == 1 && arr.GetLength(1) == 1)
+            return NormalizeScalar(arr[0, 0]);
+
+        if (value is ExcelMissing || value is ExcelEmpty || value is null)
+            return null;
+
+        return value;
     }
 
     private static string TriggerKey(object trigger)
