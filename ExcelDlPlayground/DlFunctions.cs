@@ -10,6 +10,9 @@ using System.Threading.Tasks;
 using TorchSharp;
 using static TorchSharp.torch;
 using System.Runtime.InteropServices;
+using System.IO.Compression;
+using System.Runtime.Serialization;
+using System.Runtime.Serialization.Json;
 
 public static class DlFunctions
 {
@@ -146,17 +149,13 @@ public static class DlFunctions
 
             // 3) Build a tiny MLP: Linear -> Tanh -> Linear
             // NOTE: For XOR/binary classification we'll use BCEWithLogitsLoss (so last layer is raw logits).
-            var net = torch.nn.Sequential(
-                ("fc1", torch.nn.Linear(input, hidden)),
-                ("tanh1", torch.nn.Tanh()),
-                ("fc2", torch.nn.Linear(hidden, output))
-            );
+            var net = BuildDefaultMlp(input, hidden, output);
 
             model.TorchModel = net;
             model.LossFn = torch.nn.BCEWithLogitsLoss(); // good default for XOR
             model.OptimizerName = "adam";
             model.LearningRate = 0.1;
-            model.Optimizer = torch.optim.Adam(model.TorchModel.parameters(), lr: model.LearningRate);
+            model.Optimizer = CreateOptimizer(model);
 
             Log($"ModelCreate | desc={description ?? "<null>"} | id={id} | in={input} hidden={hidden} out={output}");
             return id;
@@ -165,6 +164,185 @@ public static class DlFunctions
         {
             Log($"ModelCreate error | desc={description ?? "<null>"} | ex={ex}");
             return "#ERR: " + ex.Message;
+        }
+    }
+
+    [ExcelFunction(Name = "DL.SAVE", Description = "Save a model to disk")]
+    public static object Save(string model_id, string path)
+    {
+        if (string.IsNullOrWhiteSpace(model_id))
+            return "#ERR: model_id is required";
+
+        if (string.IsNullOrWhiteSpace(path))
+            return "#ERR: path is required";
+
+        if (!DlRegistry.TryGet(model_id, out var model))
+            return "#MODEL! Unknown model_id";
+
+        if (model.TorchModel == null)
+            return "#ERR: model not initialized. Call DL.MODEL_CREATE first.";
+
+        EnsureTorch();
+
+        var fullPath = Path.GetFullPath(path);
+        var tempDir = Path.Combine(Path.GetTempPath(), "ExcelDlPlayground", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        model.TrainLock.Wait();
+        try
+        {
+            var meta = new DlModelPersistence
+            {
+                FormatVersion = 1,
+                ModelId = model_id,
+                Description = model.Description ?? string.Empty,
+                InputDim = model.InputDim,
+                HiddenDim = model.HiddenDim,
+                OutputDim = model.OutputDim,
+                OptimizerName = model.OptimizerName ?? "adam",
+                LearningRate = model.LearningRate,
+                LastTriggerKey = model.LastTriggerKey,
+                LossHistory = model.LossHistory.Select(entry => new DlLossEntry { Epoch = entry.epoch, Loss = entry.loss }).ToList()
+            };
+
+            var weightsPath = Path.Combine(tempDir, "model.pt");
+            var metadataPath = Path.Combine(tempDir, "metadata.json");
+
+            var stateDict = model.TorchModel.state_dict();
+            torch.save(stateDict, weightsPath);
+            WriteMetadata(metadataPath, meta);
+
+            var outputDir = Path.GetDirectoryName(fullPath);
+            if (!string.IsNullOrWhiteSpace(outputDir))
+                Directory.CreateDirectory(outputDir);
+
+            using (var fileStream = new FileStream(fullPath, FileMode.Create, FileAccess.Write))
+            using (var archive = new ZipArchive(fileStream, ZipArchiveMode.Create))
+            {
+                AddFileToArchive(archive, weightsPath, "model.pt");
+                AddFileToArchive(archive, metadataPath, "metadata.json");
+            }
+
+            Log($"ModelSave | id={model_id} | path={fullPath}");
+            return "saved: " + fullPath;
+        }
+        catch (Exception ex)
+        {
+            Log($"ModelSave error | id={model_id} | path={fullPath} | ex={ex}");
+            return "#ERR: " + ex.Message;
+        }
+        finally
+        {
+            model.TrainLock.Release();
+            try
+            {
+                if (Directory.Exists(tempDir))
+                    Directory.Delete(tempDir, recursive: true);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    [ExcelFunction(Name = "DL.LOAD", Description = "Load a model from disk")]
+    public static object Load(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return "#ERR: path is required";
+
+        var fullPath = Path.GetFullPath(path);
+        if (!File.Exists(fullPath))
+            return "#ERR: file not found";
+
+        EnsureTorch();
+
+        var tempDir = Path.Combine(Path.GetTempPath(), "ExcelDlPlayground", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            DlModelPersistence meta;
+            var weightsPath = Path.Combine(tempDir, "model.pt");
+
+            using (var fileStream = new FileStream(fullPath, FileMode.Open, FileAccess.Read))
+            using (var archive = new ZipArchive(fileStream, ZipArchiveMode.Read))
+            {
+                var metadataEntry = archive.GetEntry("metadata.json");
+                var modelEntry = archive.GetEntry("model.pt");
+                if (metadataEntry == null || modelEntry == null)
+                    return "#ERR: invalid model package (missing entries)";
+
+                using (var metadataStream = metadataEntry.Open())
+                {
+                    meta = ReadMetadata(metadataStream);
+                }
+
+                using (var modelStream = modelEntry.Open())
+                using (var output = new FileStream(weightsPath, FileMode.Create, FileAccess.Write))
+                {
+                    modelStream.CopyTo(output);
+                }
+            }
+
+            if (meta == null || string.IsNullOrWhiteSpace(meta.ModelId))
+                return "#ERR: invalid metadata";
+
+            if (meta.FormatVersion != 1)
+                return "#ERR: unsupported model format";
+
+            if (meta.InputDim <= 0 || meta.HiddenDim <= 0 || meta.OutputDim <= 0)
+                return "#ERR: invalid model dimensions";
+
+            var model = new DlModelState(meta.Description ?? string.Empty)
+            {
+                InputDim = meta.InputDim,
+                HiddenDim = meta.HiddenDim,
+                OutputDim = meta.OutputDim,
+                OptimizerName = string.IsNullOrWhiteSpace(meta.OptimizerName) ? "adam" : meta.OptimizerName,
+                LearningRate = meta.LearningRate,
+                LastTriggerKey = meta.LastTriggerKey
+            };
+
+            model.TorchModel = BuildDefaultMlp(model.InputDim, model.HiddenDim, model.OutputDim);
+            model.LossFn = torch.nn.BCEWithLogitsLoss();
+            model.Optimizer = CreateOptimizer(model);
+
+            var stateDict = torch.load(weightsPath) as IDictionary<string, Tensor>;
+            if (stateDict == null)
+                return "#ERR: invalid weights payload";
+
+            model.TorchModel.load_state_dict(stateDict);
+            model.LossHistory.Clear();
+            if (meta.LossHistory != null)
+            {
+                foreach (var entry in meta.LossHistory)
+                {
+                    model.LossHistory.Add((entry.Epoch, entry.Loss));
+                }
+            }
+
+            model.UpdateWeightSnapshot();
+            DlRegistry.Upsert(meta.ModelId, model);
+
+            Log($"ModelLoad | id={meta.ModelId} | path={fullPath}");
+            return meta.ModelId;
+        }
+        catch (Exception ex)
+        {
+            Log($"ModelLoad error | path={fullPath} | ex={ex}");
+            return "#ERR: " + ex.Message;
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(tempDir))
+                    Directory.Delete(tempDir, recursive: true);
+            }
+            catch
+            {
+            }
         }
     }
 
@@ -235,9 +413,7 @@ public static class DlFunctions
 
                     model.OptimizerName = optimizerName;
                     model.LearningRate = learningRate;
-                    model.Optimizer = optimizerName == "sgd"
-                        ? torch.optim.SGD(model.TorchModel.parameters(), lr: learningRate)
-                        : torch.optim.Adam(model.TorchModel.parameters(), lr: learningRate);
+                    model.Optimizer = CreateOptimizer(model);
                 }
 
                 model.LossHistory.Clear();
@@ -711,6 +887,48 @@ public static class DlFunctions
     [ExcelFunction(Name = "DL.TRIGGER_KEY", Description = "Debug: show normalized trigger key")]
     public static string TriggerKeyDebug(object trigger) => TriggerKey(trigger);
 
+    private static torch.nn.Module BuildDefaultMlp(int input, int hidden, int output)
+    {
+        return torch.nn.Sequential(
+            ("fc1", torch.nn.Linear(input, hidden)),
+            ("tanh1", torch.nn.Tanh()),
+            ("fc2", torch.nn.Linear(hidden, output))
+        );
+    }
+
+    private static torch.optim.Optimizer CreateOptimizer(DlModelState model)
+    {
+        var optimizerName = model.OptimizerName ?? "adam";
+        return optimizerName.Equals("sgd", StringComparison.OrdinalIgnoreCase)
+            ? torch.optim.SGD(model.TorchModel.parameters(), lr: model.LearningRate)
+            : torch.optim.Adam(model.TorchModel.parameters(), lr: model.LearningRate);
+    }
+
+    private static void AddFileToArchive(ZipArchive archive, string sourcePath, string entryName)
+    {
+        var entry = archive.CreateEntry(entryName);
+        using (var entryStream = entry.Open())
+        using (var fileStream = new FileStream(sourcePath, FileMode.Open, FileAccess.Read))
+        {
+            fileStream.CopyTo(entryStream);
+        }
+    }
+
+    private static void WriteMetadata(string path, DlModelPersistence meta)
+    {
+        var serializer = new DataContractJsonSerializer(typeof(DlModelPersistence));
+        using (var stream = new FileStream(path, FileMode.Create, FileAccess.Write))
+        {
+            serializer.WriteObject(stream, meta);
+        }
+    }
+
+    private static DlModelPersistence ReadMetadata(Stream stream)
+    {
+        var serializer = new DataContractJsonSerializer(typeof(DlModelPersistence));
+        return (DlModelPersistence)serializer.ReadObject(stream);
+    }
+
     private static void Log(string message)
     {
         try
@@ -789,6 +1007,50 @@ public static class DlFunctions
         }
 
         return "torch native missing: " + string.Join(", ", missing) + " | dir=" + baseDir;
+    }
+
+    [DataContract]
+    private sealed class DlModelPersistence
+    {
+        [DataMember(Order = 1)]
+        public int FormatVersion { get; set; }
+
+        [DataMember(Order = 2)]
+        public string ModelId { get; set; }
+
+        [DataMember(Order = 3)]
+        public string Description { get; set; }
+
+        [DataMember(Order = 4)]
+        public int InputDim { get; set; }
+
+        [DataMember(Order = 5)]
+        public int HiddenDim { get; set; }
+
+        [DataMember(Order = 6)]
+        public int OutputDim { get; set; }
+
+        [DataMember(Order = 7)]
+        public string OptimizerName { get; set; }
+
+        [DataMember(Order = 8)]
+        public double LearningRate { get; set; }
+
+        [DataMember(Order = 9)]
+        public string LastTriggerKey { get; set; }
+
+        [DataMember(Order = 10)]
+        public List<DlLossEntry> LossHistory { get; set; }
+    }
+
+    [DataContract]
+    private sealed class DlLossEntry
+    {
+        [DataMember(Order = 1)]
+        public int Epoch { get; set; }
+
+        [DataMember(Order = 2)]
+        public double Loss { get; set; }
     }
 
     [DllImport("kernel32", SetLastError = true, CharSet = CharSet.Auto)]
