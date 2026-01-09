@@ -131,7 +131,9 @@ public static class DlFunctions
 
             model.TorchModel = net;
             model.LossFn = torch.nn.BCEWithLogitsLoss(); // good default for XOR
-            model.Optimizer = torch.optim.Adam(model.TorchModel.parameters(), lr: 0.1);
+            model.OptimizerName = "adam";
+            model.LearningRate = 0.1;
+            model.Optimizer = torch.optim.Adam(model.TorchModel.parameters(), lr: model.LearningRate);
 
             Log($"ModelCreate | desc={description ?? "<null>"} | id={id} | in={input} hidden={hidden} out={output}");
             return id;
@@ -189,9 +191,30 @@ public static class DlFunctions
                     model.LossFn = torch.nn.BCEWithLogitsLoss();
                 }
 
-                if (model.Optimizer == null)
+                var optimizerName = ParseStringOpt(opts, "optim", model.OptimizerName ?? "adam");
+                if (string.IsNullOrWhiteSpace(optimizerName))
+                    optimizerName = "adam";
+                optimizerName = optimizerName.Trim().ToLowerInvariant();
+
+                if (optimizerName != "adam" && optimizerName != "sgd")
+                    return $"#ERR: unsupported optimizer '{optimizerName}'. Use optim=adam or optim=sgd.";
+
+                bool optimizerNeedsReset = model.Optimizer == null
+                    || !string.Equals(model.OptimizerName, optimizerName, StringComparison.OrdinalIgnoreCase)
+                    || Math.Abs(model.LearningRate - learningRate) > 1e-12;
+
+                if (optimizerNeedsReset)
                 {
-                    model.Optimizer = torch.optim.Adam(model.TorchModel.parameters(), lr: learningRate);
+                    if (model.Optimizer is IDisposable disposable)
+                    {
+                        disposable.Dispose();
+                    }
+
+                    model.OptimizerName = optimizerName;
+                    model.LearningRate = learningRate;
+                    model.Optimizer = optimizerName == "sgd"
+                        ? torch.optim.SGD(model.TorchModel.parameters(), lr: learningRate)
+                        : torch.optim.Adam(model.TorchModel.parameters(), lr: learningRate);
                 }
 
                 model.LossHistory.Clear();
@@ -286,6 +309,21 @@ public static class DlFunctions
             {
                 if (double.TryParse(kv[1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var v))
                     return v;
+            }
+        }
+        return defaultValue;
+    }
+
+    private static string ParseStringOpt(string opts, string key, string defaultValue)
+    {
+        if (string.IsNullOrWhiteSpace(opts)) return defaultValue;
+        var parts = opts.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries);
+        foreach (var p in parts)
+        {
+            var kv = p.Split('=');
+            if (kv.Length == 2 && kv[0].Trim().Equals(key, StringComparison.OrdinalIgnoreCase))
+            {
+                return kv[1].Trim();
             }
         }
         return defaultValue;

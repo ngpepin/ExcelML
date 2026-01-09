@@ -41,6 +41,8 @@ internal sealed class DlModelState
     public torch.optim.Optimizer Optimizer { get; set; }
     public torch.nn.Module LossFn { get; set; }
     public readonly List<Tensor> WeightSnapshot = new List<Tensor>();
+    public string OptimizerName { get; set; }
+    public double LearningRate { get; set; }
     public int InputDim { get; set; }
     public int HiddenDim { get; set; }
     public int OutputDim { get; set; }
