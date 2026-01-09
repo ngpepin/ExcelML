@@ -58,6 +58,7 @@
 - Trigger guard works (returns skipped when trigger unchanged).
 - Native copy + preload resolves `TypeInitializationException`.
 - Dynamic forward requires Microsoft.CSharp; missing reference causes CS0656.
+- **Refresh behavior:** training queues throttled `xlcCalculateNow` (every 10 epochs and on completion). STATUS/LOSS_HISTORY/WEIGHTS/GRADS/ACTIVATIONS are volatile and refresh on those recalcs; no workbook-wide recalc is forced (past attempt crashed Excel).
 
 ### Do NOT try (known pitfalls)
 - **Loading 32-bit Excel / x86**: TorchSharp native binaries here are win-x64 only; 32-bit Excel will fail to load natives.
@@ -66,6 +67,7 @@
 - **Trigger-based training without changing trigger cell**: `DL.TRAIN` will intentionally return `skipped` if trigger unchanged.
 - **Using Debug config with x64 solution mappings that don’t exist**: leads to “project configuration does not exist” warnings; use Any CPU configs as documented.
 - **Expecting GPU**: this build is CPU-only (libtorch-cpu-win-x64).
+- **Forcing workbook-wide recalcs on training completion**: previously caused Excel crash; throttled `xlcCalculateNow` is used instead.
 
 ### Notes / Known Past Issues
 - Missing libtorch natives caused `TypeInitializationException`; fixed via copy glob + preload.
