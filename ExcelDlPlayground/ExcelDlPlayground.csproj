@@ -1,0 +1,49 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFramework>net48</TargetFramework>
+		<UseWindowsForms>true</UseWindowsForms>
+
+		<!-- Excel is 64-bit -->
+		<PlatformTarget>x64</PlatformTarget>
+
+		<!-- Helps ensure NuGet assets are available to copy -->
+		<CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+		<Prefer32Bit>false</Prefer32Bit>
+		<RestorePackagesPath>$(UserProfile)\.nuget\packages</RestorePackagesPath>
+	</PropertyGroup>
+
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+		<StartAction>Program</StartAction>
+		<StartProgram>$(ProgramW6432)\Microsoft Office\root\Office16\EXCEL.EXE</StartProgram>
+		<StartArguments>"$(TargetDir)ExcelDlPlayground-AddIn64.xll"</StartArguments>
+		<StartWorkingDirectory>$(TargetDir)</StartWorkingDirectory>
+		<ExcelDnaPackSkip>true</ExcelDnaPackSkip>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="ExcelDna.AddIn" Version="1.9.0" />
+
+		<!-- Choose ONE TorchSharp-cpu version and keep it consistent -->
+
+		<!-- Add the backend explicitly (matches the error you saw) -->
+		<PackageReference Include="libtorch-cpu-win-x64" Version="2.7.1.0" GeneratePathProperty="true" />
+		<PackageReference Include="TorchSharp-cpu" Version="0.105.2" GeneratePathProperty="true" />
+	</ItemGroup>
+
+	<PropertyGroup>
+		<LibtorchPackageRoot>$(PkgLibtorch_cpu_win_x64)</LibtorchPackageRoot>
+		<TorchSharpCpuPackageRoot>$(PkgTorchSharp_cpu)</TorchSharpCpuPackageRoot>
+	</PropertyGroup>
+
+	<Target Name="CopyTorchNativeBinaries" AfterTargets="Build">
+		<ItemGroup>
+			<TorchNative Include="$(RestorePackagesPath)\libtorch-cpu-win-x64\**\runtimes\win-x64\native\*.dll" />
+			<TorchNative Include="$(RestorePackagesPath)\torchsharp-cpu\**\runtimes\win-x64\native\*.dll" />
+			<TorchNative Include="$(RestorePackagesPath)\torchsharp\**\runtimes\win-x64\native\*.dll" />
+		</ItemGroup>
+		<Message Importance="High" Text="CopyTorchNativeBinaries -> @(TorchNative)" />
+		<Copy SourceFiles="@(TorchNative)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" Condition="@(TorchNative) != ''" />
+	</Target>
+
+</Project>
