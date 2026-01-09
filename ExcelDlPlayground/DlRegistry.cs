@@ -25,8 +25,6 @@ internal static class DlRegistry
 
 internal sealed class DlModelState
 {
-
-
     public string Description { get; }
 
     // Trigger token to avoid re-training
@@ -40,7 +38,12 @@ internal sealed class DlModelState
     public torch.nn.Module TorchModel { get; set; }
     public torch.optim.Optimizer Optimizer { get; set; }
     public torch.nn.Module LossFn { get; set; }
-    public readonly List<Tensor> WeightSnapshot = new List<Tensor>();
+    public readonly Dictionary<string, LayerTensorSnapshot> WeightSnapshot =
+        new Dictionary<string, LayerTensorSnapshot>(StringComparer.OrdinalIgnoreCase);
+    public readonly Dictionary<string, LayerTensorSnapshot> GradSnapshot =
+        new Dictionary<string, LayerTensorSnapshot>(StringComparer.OrdinalIgnoreCase);
+    public readonly Dictionary<string, Tensor> ActivationSnapshot =
+        new Dictionary<string, Tensor>(StringComparer.OrdinalIgnoreCase);
     public string OptimizerName { get; set; }
     public double LearningRate { get; set; }
     public int InputDim { get; set; }
@@ -55,18 +58,92 @@ internal sealed class DlModelState
 
     public void UpdateWeightSnapshot()
     {
-        foreach (var t in WeightSnapshot)
-        {
-            t.Dispose();
-        }
-        WeightSnapshot.Clear();
+        ClearLayerSnapshots(WeightSnapshot);
 
         if (TorchModel == null)
             return;
 
-        foreach (var p in TorchModel.parameters())
+        foreach (var layer in TorchModel.named_children())
         {
-            WeightSnapshot.Add(p.detach().clone().cpu());
+            if (layer.module is torch.nn.Linear linear)
+            {
+                var weight = linear.weight.detach().clone().cpu();
+                Tensor bias = null;
+                if (linear.bias is not null)
+                {
+                    bias = linear.bias.detach().clone().cpu();
+                }
+                WeightSnapshot[layer.name] = new LayerTensorSnapshot(weight, bias);
+            }
         }
+    }
+
+    public void UpdateGradSnapshot()
+    {
+        ClearLayerSnapshots(GradSnapshot);
+
+        if (TorchModel == null)
+            return;
+
+        foreach (var layer in TorchModel.named_children())
+        {
+            if (layer.module is torch.nn.Linear linear)
+            {
+                var weightGrad = linear.weight.grad();
+                if (weightGrad is null)
+                    continue;
+
+                var weight = weightGrad.detach().clone().cpu();
+                Tensor bias = null;
+                var biasGrad = linear.bias?.grad();
+                if (biasGrad is not null)
+                {
+                    bias = biasGrad.detach().clone().cpu();
+                }
+
+                GradSnapshot[layer.name] = new LayerTensorSnapshot(weight, bias);
+            }
+        }
+    }
+
+    public void UpdateActivationSnapshot(Dictionary<string, Tensor> activations)
+    {
+        foreach (var entry in ActivationSnapshot)
+        {
+            entry.Value.Dispose();
+        }
+        ActivationSnapshot.Clear();
+
+        foreach (var entry in activations)
+        {
+            ActivationSnapshot[entry.Key] = entry.Value;
+        }
+    }
+
+    private static void ClearLayerSnapshots(Dictionary<string, LayerTensorSnapshot> snapshots)
+    {
+        foreach (var entry in snapshots)
+        {
+            entry.Value.Dispose();
+        }
+        snapshots.Clear();
+    }
+}
+
+internal sealed class LayerTensorSnapshot : IDisposable
+{
+    public Tensor Weight { get; }
+    public Tensor Bias { get; }
+
+    public LayerTensorSnapshot(Tensor weight, Tensor bias)
+    {
+        Weight = weight;
+        Bias = bias;
+    }
+
+    public void Dispose()
+    {
+        Weight?.Dispose();
+        Bias?.Dispose();
     }
 }
