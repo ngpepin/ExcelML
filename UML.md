@@ -57,7 +57,9 @@ node "File System" as FS
 
 ' --- UI + call surfaces ---
 ExcelUI --> Ribbon : Ribbon callbacks
-ExcelCalc --> DlUdfs : UDF calls (MODEL_CREATE, TRAIN, ...)
+ExcelCalc --> DlUdfs : UDF calls (DL.*)
+ExcelCalc --> BasicUdfs : UDF calls (non-DL)
+ExcelCalc --> AsyncUdfs : UDF calls (async demos)
 
 ' --- Startup ---
 Startup --> ExcelMacro : (optional) queue recalc / init hooks
@@ -74,7 +76,7 @@ DlUdfs --> FS : save/load model packages (.dlzip)
 
 ' --- Push updates to Excel ---
 DlUdfs --> Hub : Publish(modelId) during training + completion
-Hub --> DlUdfs : Observe(...) subscribers receive OnNext triggers
+Hub --> ExcelCalc : Notifies registered IExcelObserver instances\n(used by Observe(...) UDFs)
 
 ' --- Registry owns model instances ---
 Registry o-- ModelState : manages instances keyed by modelId
@@ -101,6 +103,13 @@ Registry o-- ModelState : manages instances keyed by modelId
 skinparam classAttributeIconSize 0
 skinparam shadowing false
 
+class StatusObservable
+class LossObservable
+class PredictObservable {
+  - _lastVersion : long
+  - _lastResult : object
+  - ComputeOrGetCached()
+}
 class DlFunctions {
   .. Torch init / native preload ..
   - bool _torchInitialized
@@ -230,6 +239,16 @@ DlFunctions --> "ExcelDna.Integration" : UDF surface
 DlFunctions --> "ExcelAsyncUtil" : RunTask / Observe
 AddInStartup --> "Excel host" : add-in lifecycle
 
+DlFunctions ..> StatusObservable : Observe(...)
+DlFunctions ..> LossObservable : Observe(...)
+DlFunctions ..> PredictObservable : Observe(...)\n(cached)
+
+StatusObservable ..> DlProgressHub : Subscribe(modelId)
+LossObservable ..> DlProgressHub : Subscribe(modelId)
+PredictObservable ..> DlProgressHub : Subscribe(modelId)
+
+DlProgressHub ..> "IExcelObserver" : OnNext(modelId)
+
 @enduml
 ```
 
@@ -255,7 +274,7 @@ participant "DlFunctions.Train\n(ExcelAsyncUtil.RunTask)" as Train
 participant DlRegistry as Registry
 participant DlModelState as Model
 participant DlProgressHub as Hub
-participant "STATUS / LOSS / PREDICT\nObservers (Observe)" as Obs
+participant "Excel-DNA Observe(...) pipeline\n(IExcelObservable/IExcelObserver)" as Obs
 participant TorchSharp as Torch
 participant "Excel Macro Queue\n(optional throttled recalc)" as MacroQ
 
@@ -270,7 +289,7 @@ Train -> Torch : EnsureTorch()
 Train -> Model : IsTraining=true\nTrainingVersion++
 
 Train -> Hub : Publish(modelId)  // "training started"
-Hub -> Obs : OnNext(modelId)\n(rebuild STATUS/LOSS/PREDICT views)
+Hub -> Obs : OnNext(modelId)\nObservers call builders; Excel updates cell values
 
 Train -> Torch : BuildTensorFromRange(X,y)
 loop epochs (1..N)
@@ -288,7 +307,7 @@ Train -> Model : LastTriggerKey = TriggerKey(trigger)
 Train -> Model : IsTraining=false
 
 Train -> Hub : Publish(modelId)  // "training completed"
-Hub -> Obs : OnNext(modelId)\nPREDICT recomputes now (stable model)
+Hub -> Obs : OnNext(modelId)\nPREDICT recomputes (IsTraining=false && version changed)
 
 Train -> MacroQ : QueueRecalcOnce(train-complete)\n(optional fallback)
 Train -> Model : TrainLock.Release()

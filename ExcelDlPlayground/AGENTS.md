@@ -84,6 +84,8 @@ Examples:
 * Must never block
 * Must not force workbook recalculation
 * Must re-emit cached values when nothing changed
+* Must be safe to call repeatedly with no state change
+* Must tolerate spurious OnNext signals (publish is a hint, not a command)
 
 **Pattern**
 
@@ -91,6 +93,8 @@ Examples:
 * Central publish hub (`DlProgressHub`)
 * Per-observable caching
 * Push only on meaningful state transitions
+* Observers are driven by Excel-DNA’s Observe(...) pipeline
+* DlProgressHub.Publish(modelId) only signals “something may have changed”
 
 * * *
 
@@ -162,7 +166,12 @@ Incorrect order causes:
 
 Excel recalculates everything on workbook open → models recreated
 
+Excel will replay DL.MODEL_CREATE during workbook open before
+any dependent DL.* functions execute. MODEL_CREATE must therefore
+be idempotent and registry-backed, not just session-backed.
+
 ### Solution
+* Caller-scoped cache ensures replayed formulas rebind to existing models
 
 **Process-stable session ID**
 
@@ -209,6 +218,9 @@ E20:=DL.STATUS(E2)
 G2: =DL.PREDICT(E2, A2:B4)
 ```
 
+> Note: DL.MODEL_CREATE is expected to re-run on workbook open and
+> must return the same model_id for the same caller + trigger.
+
 * * *
 
 8. Trigger Semantics (Exact)
@@ -252,8 +264,8 @@ G2: =DL.PREDICT(E2, A2:B4)
 
 ### Why no recalculation storm
 
-* Observers are push-based
-* Only volatile inspectors use throttled `xlcCalculateNow`
+* Observers are push-based (no recalculation required)
+* Only volatile inspectors MAY use throttled `xlcCalculateNow` as a fallback
 * Workbook-wide recalc is **never forced**
 
 * * *
@@ -299,8 +311,9 @@ G2: =DL.PREDICT(E2, A2:B4)
 
 * Workbook-wide recalc loops
 * Blocking `Wait()` on UI thread
+* Calling TrainLock.Wait() inside Observe / OnNext
 * Volatile session IDs
-* Recreating models in pure UDFs
+* Recreating models during recalculation without caller-scoped caching
 * 32-bit Excel
 * GPU expectations (CPU-only)
 
@@ -327,6 +340,12 @@ G2: =DL.PREDICT(E2, A2:B4)
 * Additional optimizers
 * More loss functions
 * Structured examples workbook
+
+* * *
+
+### Architectural invariant
+
+No DL.* function may assume it is called exactly once.
 
 * * *
 
