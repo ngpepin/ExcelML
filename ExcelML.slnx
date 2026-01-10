@@ -8,6 +8,7 @@
     <File Path="Example01.md" />
     <File Path="Example01.pdf" />
     <File Path="Example01.xlsx" />
+    <File Path="media/xor-training.gif" />
     <File Path="README.md" />
     <File Path="UML.md" />
   </Folder>

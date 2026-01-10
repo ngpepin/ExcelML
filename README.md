@@ -6,6 +6,12 @@
 
 ## Vision
 
+<p align="center">
+  <img src="media/xor-training.gif" width="900">
+  <br/>
+  <em>Live XOR training with push-based updates inside Excel</em>
+</p>
+
 **ExcelML** is an experimental platform that brings *real* machine learning and deep learning workflows directly into Microsoft Excel — without Python, Jupyter, or external services.  We are developing an Excel-based environment to familiarize our clients and business partners with basic ML concepts in the most approachable way we can think of.  For the moment we're limiting ourselves to core ML concepts, but we plan to eventually extend it to LLM's as well.
 
 The key idea is simple but ambitious:
