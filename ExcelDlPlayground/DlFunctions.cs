@@ -415,20 +415,56 @@ public static class DlFunctions
     /// <summary>
     /// Returns a snapshot of training state for a given model.
     /// </summary>
-    [ExcelFunction(Name = "DL.STATUS", Description = "Show training status for a model", IsVolatile = true)]
+    [ExcelFunction(Name = "DL.STATUS", Description = "Show training status for a model")]
     public static object Status(string model_id)
+    {
+        return ExcelAsyncUtil.Observe("DL.STATUS", new object[] { model_id }, () => new StatusObservable(model_id));
+    }
+
+    private sealed class StatusObservable : IExcelObservable
+    {
+        private readonly string _modelId;
+        public StatusObservable(string modelId) => _modelId = modelId;
+
+        public IDisposable Subscribe(IExcelObserver observer)
+        {
+            // push initial state
+            observer.OnNext(BuildStatus(_modelId));
+
+            // subscribe for updates (each epoch Publish() will trigger a new OnNext)
+            return DlProgressHub.Subscribe(_modelId, new WrappedObserver(observer, _modelId, BuildStatus));
+        }
+    }
+
+    private sealed class WrappedObserver : IExcelObserver
+    {
+        private readonly IExcelObserver _inner;
+        private readonly string _modelId;
+        private readonly Func<string, object> _builder;
+
+        public WrappedObserver(IExcelObserver inner, string modelId, Func<string, object> builder)
+        {
+            _inner = inner; _modelId = modelId; _builder = builder;
+        }
+
+        public void OnNext(object value) => _inner.OnNext(_builder(_modelId));
+        public void OnError(Exception exception) => _inner.OnError(exception);
+        public void OnCompleted() => _inner.OnCompleted();
+    }
+
+    private static object BuildStatus(string model_id)
     {
         if (!DlRegistry.TryGet(model_id, out var model))
             return "#MODEL! Unknown model_id";
 
         return new object[,]
         {
-            { "model", model_id },
-            { "status", model.IsTraining ? "training" : "idle" },
-            { "last_epoch", model.LastEpoch },
-            { "last_loss", double.IsNaN(model.LastLoss) ? "" : model.LastLoss.ToString("G6", CultureInfo.InvariantCulture) },
-            { "last_trigger", model.LastTriggerKey ?? "<null>" },
-            { "version", model.TrainingVersion }
+        { "model", model_id },
+        { "status", model.IsTraining ? "training" : "idle" },
+        { "last_epoch", model.LastEpoch },
+        { "last_loss", double.IsNaN(model.LastLoss) ? "" : model.LastLoss.ToString("G6", CultureInfo.InvariantCulture) },
+        { "last_trigger", model.LastTriggerKey ?? "<null>" },
+        { "version", model.TrainingVersion }
         };
     }
 
@@ -492,7 +528,9 @@ public static class DlFunctions
                 model.LastEpoch = 0;
                 model.LastLoss = double.NaN;
 
-                if (resetModel)
+                DlProgressHub.Publish(model_id);
+
+                 if (resetModel)
                 {
                     if (model.Optimizer is IDisposable oldOpt)
                     {
@@ -555,21 +593,23 @@ public static class DlFunctions
                             model.Optimizer.step();
                             loss = lossTensor.ToSingle();
                         }
+                         model.LossHistory.Add((e, loss));
+                         model.LastEpoch = e;
+                         model.LastLoss = loss;
 
-                        model.LossHistory.Add((e, loss));
-                        model.LastEpoch = e;
-                        model.LastLoss = loss;
+                         if (e == 1 || e == epochs || (e % 5 == 0))
+                             DlProgressHub.Publish(model_id);
 
-                        // queue a recalc each epoch (throttled in QueueRecalcOnce)
-                        QueueRecalcOnce("loss-progress", false);
-                        await Task.Delay(1).ConfigureAwait(false);
-                    }
+                         if (e % 20 == 0)
+                             await Task.Yield();
+                     }
 
-                    model.UpdateWeightSnapshot();
+                     model.UpdateWeightSnapshot();
                 }
 
                 model.LastTriggerKey = key;
                 model.IsTraining = false;
+                DlProgressHub.Publish(model_id);
                 QueueRecalcOnce("train-complete", true);
                 Log($"Train complete | model={model_id} | key set to {key} | epochs={epochs} | final_loss={loss}");
 
@@ -582,6 +622,7 @@ public static class DlFunctions
             }
             finally
             {
+                DlProgressHub.Publish(model_id);
                 model.IsTraining = false;
                 model.TrainLock.Release();
             }
@@ -591,8 +632,25 @@ public static class DlFunctions
     /// <summary>
     /// Returns epoch/loss pairs recorded during the last training run.
     /// </summary>
-    [ExcelFunction(Name = "DL.LOSS_HISTORY", Description = "Spill epoch/loss history for a model", IsVolatile = true)]
+    [ExcelFunction(Name = "DL.LOSS_HISTORY", Description = "Spill epoch/loss history for a model")]
     public static object LossHistory(string model_id)
+    {
+        return ExcelAsyncUtil.Observe("DL.LOSS_HISTORY", new object[] { model_id }, () => new LossObservable(model_id));
+    }
+
+    private sealed class LossObservable : IExcelObservable
+    {
+        private readonly string _modelId;
+        public LossObservable(string modelId) => _modelId = modelId;
+
+        public IDisposable Subscribe(IExcelObserver observer)
+        {
+            observer.OnNext(BuildLossTable(_modelId));
+            return DlProgressHub.Subscribe(_modelId, new WrappedObserver(observer, _modelId, BuildLossTable));
+        }
+    }
+
+    private static object BuildLossTable(string model_id)
     {
         if (!DlRegistry.TryGet(model_id, out var model))
             return "#MODEL! Unknown model_id";
