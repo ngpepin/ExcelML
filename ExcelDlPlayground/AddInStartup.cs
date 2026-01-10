@@ -10,14 +10,12 @@ public class AddInStartup : IExcelAddIn
     /// </summary>
     public void AutoOpen()
     {
-        try
+        // Run on Excel thread
+        ExcelAsyncUtil.QueueAsMacro(() =>
         {
-            // Recalculate on add-in load so DL.MODEL_CREATE cells refresh once when the workbook opens.
-            XlCall.Excel(XlCall.xlcCalculateNow);
-        }
-        catch
-        {
-        }
+            try { XlCall.Excel(XlCall.xlcCalculateNow); }
+            catch { }
+        });
     }
 
     /// <summary>

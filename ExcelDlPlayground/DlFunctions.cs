@@ -140,12 +140,37 @@ public static class DlFunctions
     /// <summary>
     /// Creates a model entry and initializes a small MLP with defaults based on description text.
     /// </summary>
-    [ExcelFunction(Name = "DL.MODEL_CREATE", Description = "Create a model and return a model_id" /* non-volatile */)]
-    public static object ModelCreate(string description)
+    [ExcelFunction(Name = "DL.MODEL_CREATE", Description = "Create a model and return a model_id")]
+    public static object ModelCreate(
+      string description,
+      object trigger = null   // optional
+  )
     {
+        // Normalize trigger (for logging or future use)
+        var triggerKey = TriggerKey(trigger);
+
         try
         {
             EnsureTorch();
+
+            // Sticky per-cell behavior:
+            // - If this same cell has already created a model AND the trigger hasn't changed,
+            //   then reuse the same model_id.
+            var callerKey = CallerKey();
+
+            lock (_modelCreateCacheLock)
+            {
+                if (_modelCreateCache.TryGetValue(callerKey, out var entry) &&
+                    entry != null &&
+                    entry.LastTriggerKey == triggerKey &&
+                    !string.IsNullOrWhiteSpace(entry.ModelId))
+                {
+                    // If registry still has it, return it; otherwise fall through to recreate.
+                    if (DlRegistry.TryGet(entry.ModelId, out var _))
+                        return entry.ModelId;
+                }
+            }
+
             // 1) Create registry entry
             var id = DlRegistry.CreateModel(description ?? "");
             if (!DlRegistry.TryGet(id, out var model))
@@ -173,15 +198,26 @@ public static class DlFunctions
             model.LearningRate = 0.1;
             model.Optimizer = CreateOptimizer(model);
 
-            Log($"ModelCreate | desc={description ?? "<null>"} | id={id} | in={input} hidden={hidden} out={output}");
+            // Cache result for this specific calling cell + triggerKey
+            lock (_modelCreateCacheLock)
+            {
+                _modelCreateCache[callerKey] = new ModelCreateCacheEntry
+                {
+                    ModelId = id,
+                    LastTriggerKey = triggerKey
+                };
+            }
+
+            Log($"ModelCreate | caller={callerKey} | trig={triggerKey} | desc={description ?? "<null>"} | id={id} | in={input} hidden={hidden} out={output}");
             return id;
         }
         catch (Exception ex)
         {
-            Log($"ModelCreate error | desc={description ?? "<null>"} | ex={ex}");
+            Log($"ModelCreate error | trig={triggerKey} | desc={description ?? "<null>"} | ex={ex}");
             return "#ERR: " + ex.Message;
         }
     }
+
 
     /// <summary>
     /// Serializes a model and metadata to a zip payload on disk.
@@ -1426,6 +1462,31 @@ public static class DlFunctions
             return ex.ToString();
         }
     }
+    private sealed class ModelCreateCacheEntry
+    {
+        public string ModelId;
+        public string LastTriggerKey;
+    }
+
+    private static readonly Dictionary<string, ModelCreateCacheEntry> _modelCreateCache =
+        new Dictionary<string, ModelCreateCacheEntry>(StringComparer.OrdinalIgnoreCase);
+
+    private static readonly object _modelCreateCacheLock = new object();
+
+    private static string CallerKey()
+    {
+        // Stable per-cell key: "'Sheet1'!$A$1"
+        var caller = XlCall.Excel(XlCall.xlfCaller) as ExcelReference;
+        if (caller == null) return "<unknown-caller>";
+
+        var addr = (string)XlCall.Excel(XlCall.xlfReftext, caller, true);
+        return addr ?? "<unknown-caller>";
+    }
+
+    private static readonly string _sessionId = Guid.NewGuid().ToString("N");
+
+    [ExcelFunction(Name = "DL.SESSION_ID", Description = "Stable id for this Excel process", IsVolatile = false)]
+    public static string SessionId() => _sessionId;
 
     [ExcelFunction(Name = "DL.TORCH_NATIVE_CHECK", Description = "Debug: list missing torch native DLLs")]
     public static string TorchNativeCheck()

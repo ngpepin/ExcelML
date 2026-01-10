@@ -38,7 +38,7 @@ node "File System" as FS
 [Functions] --> AddIn : Utility UDFs
 [AsyncFunctions] --> AddIn : Async UDF wrapper
 [DlFunctions] --> [DlRegistry] : create/load/save/get model state
-[DlFunctions] --> [DlProgressHub] : publish/subscribe progress
+[DlFunctions] --> [DlProgressHub] : publish/subscribe progress (STATUS, LOSS)
 [DlFunctions] --> TorchSharp : tensors, autograd, optimizers
 [DlFunctions] --> FS : save/load model packages (.dlzip)
 [DlRegistry] o-- [DlModelState] : manages instances
@@ -46,10 +46,6 @@ node "File System" as FS
 AddIn ..> TorchSharp : depends on native DLLs
 @enduml
 ```
-
----
-
-<div style="page-break-after: always; break-after: page;"></div>
 
 ## Class Diagram (Key Types)
 
@@ -147,7 +143,7 @@ class AddInStartup { + AutoOpen() + AutoClose() }
 class DlRibbon { + GetCustomUI(ribbonId) + OnLoad(ribbonUi) + OnHelloClick(control) + OnInvalidateClick(control) }
 
 DlFunctions --> DlRegistry
-DlFunctions --> DlProgressHub : publish / subscribe
+DlFunctions --> DlProgressHub : publish / subscribe (STATUS, LOSS)
 DlRegistry o-- DlModelState
 DlModelState o-- LayerTensorSnapshot
 DlFunctions --> "TorchSharp\n(torch, tensors, optimizers)" : uses
@@ -158,10 +154,6 @@ AddInStartup --> "Excel xlcCalculateNow" : triggers recalc
 DlRibbon --> "Excel Ribbon UI" : callbacks
 @enduml
 ```
-
----
-
-<div style="page-break-after: always; break-after: page;"></div>
 
 ## Sequence (Training happy path)
 
@@ -174,6 +166,7 @@ participant DlRegistry
 participant DlModelState as Model
 participant DlProgressHub as Hub
 participant TorchSharp
+participant "Volatile Inspectors" as Inspect
 
 User -> Excel : Change trigger cell
 Excel -> Train : DL.TRAIN(model_id, X, y, opts, trigger)
@@ -188,9 +181,10 @@ loop epochs
   Train -> TorchSharp : backward()
   Train -> TorchSharp : optimizer.step()
   Train -> Model : UpdateGradSnapshot()
-  Train -> Hub : Publish(progress) **every 5 epochs + first**
+  Train -> Hub : Publish(progress) **epoch1 + every 5 + final**
 end
 Train -> Model : UpdateWeightSnapshot(); LastTriggerKey=trigger
 Train -> Hub : Publish(final)
+Train -> Inspect : QueueRecalcOnce(train-complete) **throttled**
 Train -> Excel : return {status=done, epochs, final_loss}
 @enduml
