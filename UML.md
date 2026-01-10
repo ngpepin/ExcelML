@@ -45,6 +45,10 @@ AddIn ..> TorchSharp : depends on native DLLs
 @enduml
 ```
 
+---
+
+<div style="page-break-after: always; break-after: page;"></div>
+
 ## Class Diagram (Key Types)
 
 ```plantuml
@@ -157,6 +161,10 @@ AddInStartup --> "Excel xlcCalculateNow" : triggers recalc
 DlRibbon --> "Excel Ribbon UI" : callbacks
 @enduml
 ```
+
+---
+
+<div style="page-break-after: always; break-after: page;"></div>
 
 ## Sequence (Training happy path)
 
