@@ -140,14 +140,18 @@ public static class DlFunctions
     /// <summary>
     /// Creates a model entry and initializes a small MLP with defaults based on description text.
     /// </summary>
-    [ExcelFunction(Name = "DL.MODEL_CREATE", Description = "Create a model and return a model_id")]
+    [ExcelFunction(Name = "DL.MODEL_CREATE", Description = "Create a model and return a model_id",
+        IsVolatile = true
+        )]
     public static object ModelCreate(
       string description,
       object trigger = null   // optional
   )
     {
-        // Normalize trigger (for logging or future use)
-        var triggerKey = TriggerKey(trigger);
+    
+        var triggerKey = trigger == null || trigger is ExcelMissing || trigger is ExcelEmpty
+    ? SessionId()            // your stable per-process id
+    : TriggerKey(trigger);
 
         try
         {
@@ -214,7 +218,7 @@ public static class DlFunctions
         catch (Exception ex)
         {
             Log($"ModelCreate error | trig={triggerKey} | desc={description ?? "<null>"} | ex={ex}");
-            return "#ERR: " + ex.Message;
+            return "#ERR: " + ex.GetType().Name + " | " + ex.Message;
         }
     }
 
@@ -538,97 +542,97 @@ public static class DlFunctions
 
         return ExcelAsyncUtil.RunTask<object>(functionName, parameters, async () =>
          {
-            await model.TrainLock.WaitAsync().ConfigureAwait(false);
-            try
-            {
-                Log($"Train lock acquired | model={model_id} | key={key} | last={model.LastTriggerKey ?? "<null>"}");
+             await model.TrainLock.WaitAsync().ConfigureAwait(false);
+             try
+             {
+                 Log($"Train lock acquired | model={model_id} | key={key} | last={model.LastTriggerKey ?? "<null>"}");
 
-                if (model.LastTriggerKey == key)
-                {
-                    Log($"Train early no-op inside lock | model={model_id} | key={key} | last={model.LastTriggerKey ?? "<null>"}");
-                    return new object[,] { { "skipped", "trigger unchanged (set trigger cell to a new value to retrain)" }, { "last", model.LastTriggerKey ?? "<null>" }, { "curr", key } };
-                }
+                 if (model.LastTriggerKey == key)
+                 {
+                     Log($"Train early no-op inside lock | model={model_id} | key={key} | last={model.LastTriggerKey ?? "<null>"}");
+                     return new object[,] { { "skipped", "trigger unchanged (set trigger cell to a new value to retrain)" }, { "last", model.LastTriggerKey ?? "<null>" }, { "curr", key } };
+                 }
 
-                int epochs = ParseIntOpt(opts, "epochs", 20);
-                double learningRate = ParseDoubleOpt(opts, "lr", 0.1);
-                bool resetModel = ParseBoolOpt(opts, "reset", false);
-                EnsureTorch();
+                 int epochs = ParseIntOpt(opts, "epochs", 20);
+                 double learningRate = ParseDoubleOpt(opts, "lr", 0.1);
+                 bool resetModel = ParseBoolOpt(opts, "reset", false);
+                 EnsureTorch();
 
-                if (model.TorchModel == null)
-                {
-                    return "#ERR: model not initialized. Call DL.MODEL_CREATE first.";
-                }
+                 if (model.TorchModel == null)
+                 {
+                     return "#ERR: model not initialized. Call DL.MODEL_CREATE first.";
+                 }
 
-                model.IsTraining = true;
-                model.TrainingVersion++;
-                model.LastEpoch = 0;
-                model.LastLoss = double.NaN;
+                 model.IsTraining = true;
+                 model.TrainingVersion++;
+                 model.LastEpoch = 0;
+                 model.LastLoss = double.NaN;
 
-                DlProgressHub.Publish(model_id);
+                 DlProgressHub.Publish(model_id);
 
                  if (resetModel)
-                {
-                    if (model.Optimizer is IDisposable oldOpt)
-                    {
-                        oldOpt.Dispose();
-                    }
+                 {
+                     if (model.Optimizer is IDisposable oldOpt)
+                     {
+                         oldOpt.Dispose();
+                     }
 
-                    model.TorchModel = BuildDefaultMlp(model.InputDim, model.HiddenDim, model.OutputDim);
-                    model.LossFn = torch.nn.BCEWithLogitsLoss();
-                    model.Optimizer = null;
-                    model.WeightSnapshot.Clear();
-                    model.GradSnapshot.Clear();
-                    model.LossHistory.Clear();
-                }
+                     model.TorchModel = BuildDefaultMlp(model.InputDim, model.HiddenDim, model.OutputDim);
+                     model.LossFn = torch.nn.BCEWithLogitsLoss();
+                     model.Optimizer = null;
+                     model.WeightSnapshot.Clear();
+                     model.GradSnapshot.Clear();
+                     model.LossHistory.Clear();
+                 }
 
-                if (model.LossFn == null)
-                {
-                    model.LossFn = torch.nn.BCEWithLogitsLoss();
-                }
+                 if (model.LossFn == null)
+                 {
+                     model.LossFn = torch.nn.BCEWithLogitsLoss();
+                 }
 
-                var optimizerName = ParseStringOpt(opts, "optim", model.OptimizerName ?? "adam");
-                if (string.IsNullOrWhiteSpace(optimizerName))
-                    optimizerName = "adam";
-                optimizerName = optimizerName.Trim().ToLowerInvariant();
+                 var optimizerName = ParseStringOpt(opts, "optim", model.OptimizerName ?? "adam");
+                 if (string.IsNullOrWhiteSpace(optimizerName))
+                     optimizerName = "adam";
+                 optimizerName = optimizerName.Trim().ToLowerInvariant();
 
-                if (optimizerName != "adam" && optimizerName != "sgd")
-                    return $"#ERR: unsupported optimizer '{optimizerName}'. Use optim=adam or optim=sgd.";
+                 if (optimizerName != "adam" && optimizerName != "sgd")
+                     return $"#ERR: unsupported optimizer '{optimizerName}'. Use optim=adam or optim=sgd.";
 
-                bool optimizerNeedsReset = model.Optimizer == null
-                    || !string.Equals(model.OptimizerName, optimizerName, StringComparison.OrdinalIgnoreCase)
-                    || Math.Abs(model.LearningRate - learningRate) > 1e-12;
+                 bool optimizerNeedsReset = model.Optimizer == null
+                     || !string.Equals(model.OptimizerName, optimizerName, StringComparison.OrdinalIgnoreCase)
+                     || Math.Abs(model.LearningRate - learningRate) > 1e-12;
 
-                if (resetModel || optimizerNeedsReset)
-                {
-                    if (model.Optimizer is IDisposable disposable)
-                    {
-                        disposable.Dispose();
-                    }
+                 if (resetModel || optimizerNeedsReset)
+                 {
+                     if (model.Optimizer is IDisposable disposable)
+                     {
+                         disposable.Dispose();
+                     }
 
-                    model.OptimizerName = optimizerName;
-                    model.LearningRate = learningRate;
-                    model.Optimizer = CreateOptimizer(model);
-                }
+                     model.OptimizerName = optimizerName;
+                     model.LearningRate = learningRate;
+                     model.Optimizer = CreateOptimizer(model);
+                 }
 
-                model.LossHistory.Clear();
-                double loss = 0.0;
+                 model.LossHistory.Clear();
+                 double loss = 0.0;
 
-                using (var xTensor = BuildTensorFromRange(X, model.InputDim, "X"))
-                using (var yTensor = BuildTensorFromRange(y, model.OutputDim, "y"))
-                {
-                    model.TorchModel.train();
+                 using (var xTensor = BuildTensorFromRange(X, model.InputDim, "X"))
+                 using (var yTensor = BuildTensorFromRange(y, model.OutputDim, "y"))
+                 {
+                     model.TorchModel.train();
 
-                    for (int e = 1; e <= epochs; e++)
-                    {
-                        model.Optimizer.zero_grad();
-                        using (var output = (Tensor)((dynamic)model.TorchModel).forward(xTensor))
-                        using (var lossTensor = (Tensor)((dynamic)model.LossFn).forward(output, yTensor))
-                        {
-                            lossTensor.backward();
-                            model.UpdateGradSnapshot();
-                            model.Optimizer.step();
-                            loss = lossTensor.ToSingle();
-                        }
+                     for (int e = 1; e <= epochs; e++)
+                     {
+                         model.Optimizer.zero_grad();
+                         using (var output = (Tensor)((dynamic)model.TorchModel).forward(xTensor))
+                         using (var lossTensor = (Tensor)((dynamic)model.LossFn).forward(output, yTensor))
+                         {
+                             lossTensor.backward();
+                             model.UpdateGradSnapshot();
+                             model.Optimizer.step();
+                             loss = lossTensor.ToSingle();
+                         }
                          model.LossHistory.Add((e, loss));
                          model.LastEpoch = e;
                          model.LastLoss = loss;
@@ -641,28 +645,28 @@ public static class DlFunctions
                      }
 
                      model.UpdateWeightSnapshot();
-                }
+                 }
 
-                model.LastTriggerKey = key;
-                model.IsTraining = false;
-                DlProgressHub.Publish(model_id);
-                QueueRecalcOnce("train-complete", true);
-                Log($"Train complete | model={model_id} | key set to {key} | epochs={epochs} | final_loss={loss}");
+                 model.LastTriggerKey = key;
+                 model.IsTraining = false;
+                 DlProgressHub.Publish(model_id);
+                 QueueRecalcOnce("train-complete", true);
+                 Log($"Train complete | model={model_id} | key set to {key} | epochs={epochs} | final_loss={loss}");
 
-                return new object[,]
-                {
+                 return new object[,]
+                 {
                 { "status", "done" },
                 { "epochs", epochs },
                 { "final_loss", loss.ToString("G6", CultureInfo.InvariantCulture) }
-                };
-            }
-            finally
-            {
-                DlProgressHub.Publish(model_id);
-                model.IsTraining = false;
-                model.TrainLock.Release();
-            }
-        });
+                 };
+             }
+             finally
+             {
+                 DlProgressHub.Publish(model_id);
+                 model.IsTraining = false;
+                 model.TrainLock.Release();
+             }
+         });
     }
 
     /// <summary>
@@ -1475,12 +1479,37 @@ public static class DlFunctions
 
     private static string CallerKey()
     {
-        // Stable per-cell key: "'Sheet1'!$A$1"
-        var caller = XlCall.Excel(XlCall.xlfCaller) as ExcelReference;
-        if (caller == null) return "<unknown-caller>";
+        try
+        {
+            // Stable per-cell key: "'Sheet1'!$A$1"
+            var callerObj = XlCall.Excel(XlCall.xlfCaller);
 
-        var addr = (string)XlCall.Excel(XlCall.xlfReftext, caller, true);
-        return addr ?? "<unknown-caller>";
+            if (callerObj is ExcelReference callerRef)
+            {
+                try
+                {
+                    // true => A1-style with absolute refs
+                    var addr = (string)XlCall.Excel(XlCall.xlfReftext, callerRef, true);
+                    if (!string.IsNullOrWhiteSpace(addr))
+                        return addr;
+                }
+                catch
+                {
+                    // Reftext can fail for some callers; fall through
+                }
+            }
+
+            return "<unknown-caller>";
+        }
+        catch (ExcelDna.Integration.XlCallException)
+        {
+            // Caller not available in this Excel evaluation context (common during workbook open)
+            return "<unknown-caller>";
+        }
+        catch
+        {
+            return "<unknown-caller>";
+        }
     }
 
     private static readonly string _sessionId = Guid.NewGuid().ToString("N");
