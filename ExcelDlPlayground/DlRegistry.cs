@@ -7,11 +7,19 @@ using static TorchSharp.torch;
 using TorchSharp.Modules;
 using System.Reflection;
 
+/// <summary>
+/// In-memory registry managing model states keyed by generated identifiers.
+/// </summary>
 internal static class DlRegistry
 {
     private static readonly ConcurrentDictionary<string, DlModelState> _models =
         new ConcurrentDictionary<string, DlModelState>();
 
+    /// <summary>
+    /// Creates a new model entry with a generated ID and initializes default state.
+    /// </summary>
+    /// <param name="description">Optional description used for the model state.</param>
+    /// <returns>Newly generated model identifier.</returns>
     public static string CreateModel(string description)
     {
         var id = Guid.NewGuid().ToString("N");
@@ -20,26 +28,41 @@ internal static class DlRegistry
         return id;
     }
 
+    /// <summary>
+    /// Attempts to retrieve a model state by identifier.
+    /// </summary>
+    /// <param name="modelId">Identifier to search.</param>
+    /// <param name="state">Resolved state when found.</param>
+    /// <returns>True when a model is present.</returns>
     public static bool TryGet(string modelId, out DlModelState state) =>
         _models.TryGetValue(modelId, out state);
 
+    /// <summary>
+    /// Inserts or replaces a model state for the given identifier.
+    /// </summary>
+    /// <param name="modelId">Identifier to set.</param>
+    /// <param name="state">State to store.</param>
     public static void Upsert(string modelId, DlModelState state)
     {
         _models[modelId] = state;
     }
 }
 
+/// <summary>
+/// Holds the runtime state and snapshots for a single TorchSharp model instance.
+/// </summary>
 internal sealed class DlModelState
 {
+    /// <summary>Free-form description provided when the model was created.</summary>
     public string Description { get; }
 
-    // Trigger token to avoid re-training
+    /// <summary>Trigger token to avoid re-training when unchanged.</summary>
     public string LastTriggerKey { get; set; }
 
-    // Training lock to avoid concurrent training on same model
+    /// <summary>Training lock to avoid concurrent training on the same model.</summary>
     public readonly SemaphoreSlim TrainLock = new SemaphoreSlim(1, 1);
 
-    // Loss history for DL.LOSS_HISTORY
+    /// <summary>Loss history for DL.LOSS_HISTORY.</summary>
     public readonly List<(int epoch, double loss)> LossHistory = new List<(int, double)>();
     public torch.nn.Module TorchModel { get; set; }
     public torch.optim.Optimizer Optimizer { get; set; }
@@ -62,6 +85,10 @@ internal sealed class DlModelState
     public int LastEpoch { get; set; }
     public double LastLoss { get; set; }
 
+    /// <summary>
+    /// Initializes tracking state for a new model description.
+    /// </summary>
+    /// <param name="description">Free-form description provided by the user.</param>
     public DlModelState(string description)
     {
         Description = description;
@@ -72,6 +99,9 @@ internal sealed class DlModelState
         LastLoss = double.NaN;
     }
 
+    /// <summary>
+    /// Copies current layer weights into a CPU snapshot for later inspection in Excel.
+    /// </summary>
     public void UpdateWeightSnapshot()
     {
         ClearLayerSnapshots(WeightSnapshot);
@@ -95,6 +125,9 @@ internal sealed class DlModelState
         }
     }
 
+    /// <summary>
+    /// Copies current layer gradients into a CPU snapshot for inspection.
+    /// </summary>
     public void UpdateGradSnapshot()
     {
         ClearLayerSnapshots(GradSnapshot);
@@ -124,6 +157,10 @@ internal sealed class DlModelState
         }
     }
 
+    /// <summary>
+    /// Replaces cached activation tensors with values produced during a forward pass.
+    /// </summary>
+    /// <param name="activations">Layer-name to tensor mapping to cache.</param>
     public void UpdateActivationSnapshot(Dictionary<string, Tensor> activations)
     {
         foreach (var entry in ActivationSnapshot)
@@ -138,6 +175,10 @@ internal sealed class DlModelState
         }
     }
 
+    /// <summary>
+    /// Disposes and clears a snapshot dictionary to prevent native memory leaks.
+    /// </summary>
+    /// <param name="snapshots">Dictionary of layer snapshots to clear.</param>
     private static void ClearLayerSnapshots(Dictionary<string, LayerTensorSnapshot> snapshots)
     {
         foreach (var entry in snapshots)
@@ -147,6 +188,11 @@ internal sealed class DlModelState
         snapshots.Clear();
     }
 
+    /// <summary>
+    /// Retrieves the gradient tensor from a TorchSharp parameter via reflection to stay version-tolerant.
+    /// </summary>
+    /// <param name="parameter">Parameter tensor whose gradient is requested.</param>
+    /// <returns>Gradient tensor or null when absent.</returns>
     private static Tensor GetGrad(Tensor parameter)
     {
         if (ReferenceEquals(parameter, null))
@@ -165,17 +211,28 @@ internal sealed class DlModelState
     }
 }
 
+/// <summary>
+/// Lightweight disposable container for weight/bias snapshots used in Excel inspection UDFs.
+/// </summary>
 internal sealed class LayerTensorSnapshot : IDisposable
 {
     public Tensor Weight { get; }
     public Tensor Bias { get; }
 
+    /// <summary>
+    /// Captures the provided tensors for later disposal.
+    /// </summary>
+    /// <param name="weight">Weight tensor snapshot.</param>
+    /// <param name="bias">Bias tensor snapshot (optional).</param>
     public LayerTensorSnapshot(Tensor weight, Tensor bias)
     {
         Weight = weight;
         Bias = bias;
     }
 
+    /// <summary>
+    /// Disposes captured tensors to release native resources.
+    /// </summary>
     public void Dispose()
     {
         Weight?.Dispose();

@@ -3,10 +3,21 @@ using ExcelDna.Integration;
 
 public static class Functions
 {
+    /// <summary>
+    /// Simple greeting helper to verify the add-in is responding to Excel function calls.
+    /// </summary>
+    /// <param name="name">Name to include in the greeting.</param>
+    /// <returns>Personalized greeting string.</returns>
     [ExcelFunction(Description = "Hello from Excel-DNA")]
     public static string SayHello(string name) => $"Hello {name}";
 
     // Dynamic arrays friendly: pass 2D ranges in, return 2D array out (spills in modern Excel)
+    /// <summary>
+    /// Multiply two matrices provided as Excel ranges and return the product as a spilled array.
+    /// </summary>
+    /// <param name="a">Left matrix (rows x cols).</param>
+    /// <param name="b">Right matrix (rows x cols).</param>
+    /// <returns>Product matrix or #DIM! text when dimensions are incompatible.</returns>
     [ExcelFunction(Description = "Matrix multiply: returns A x B")]
     public static object MatMul(object[,] a, object[,] b)
     {

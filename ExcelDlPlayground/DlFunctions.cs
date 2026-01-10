@@ -15,6 +15,9 @@ using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using TorchSharp.Modules;
 
+/// <summary>
+/// Excel-DNA UDF surface and supporting helpers for TorchSharp-based deep learning inside Excel.
+/// </summary>
 public static class DlFunctions
 {
     private static bool _torchInitialized;
@@ -35,6 +38,9 @@ public static class DlFunctions
         }
     }
 
+    /// <summary>
+    /// Ensures TorchSharp native binaries are discoverable and preloaded once per process.
+    /// </summary>
     private static void EnsureTorch()
     {
         if (_torchInitialized) return;
@@ -95,6 +101,9 @@ public static class DlFunctions
         }
     }
 
+    /// <summary>
+    /// Resolves the base directory where TorchSharp assemblies and natives are expected.
+    /// </summary>
     private static string GetTorchBaseDir()
     {
         string baseDir = null;
@@ -111,6 +120,9 @@ public static class DlFunctions
         return baseDir;
     }
 
+    /// <summary>
+    /// Returns a list of TorchSharp native files missing from the expected base directory.
+    /// </summary>
     private static List<string> GetMissingTorchNativeFiles(string baseDir)
     {
         var missing = new List<string>();
@@ -125,6 +137,9 @@ public static class DlFunctions
         return missing;
     }
 
+    /// <summary>
+    /// Creates a model entry and initializes a small MLP with defaults based on description text.
+    /// </summary>
     [ExcelFunction(Name = "DL.MODEL_CREATE", Description = "Create a model and return a model_id" /* non-volatile */)]
     public static object ModelCreate(string description)
     {
@@ -168,6 +183,9 @@ public static class DlFunctions
         }
     }
 
+    /// <summary>
+    /// Serializes a model and metadata to a zip payload on disk.
+    /// </summary>
     [ExcelFunction(Name = "DL.SAVE", Description = "Save a model to disk")]
     public static object Save(string model_id, string path)
     {
@@ -246,6 +264,9 @@ public static class DlFunctions
         }
     }
 
+    /// <summary>
+    /// Loads a serialized model package (.dlzip) from disk and rehydrates registry state.
+    /// </summary>
     [ExcelFunction(Name = "DL.LOAD", Description = "Load a model from disk")]
     public static object Load(string path)
     {
@@ -352,6 +373,10 @@ public static class DlFunctions
     // Throttled recalc helper to avoid storms (no workbook-wide force)
     private static volatile bool _recalcQueued;
     private static volatile bool _recalcPending;
+
+    /// <summary>
+    /// Queues a single recalculation macro, coalescing duplicate requests to avoid storms.
+    /// </summary>
     private static void QueueRecalcOnce(string reason, bool force)
     {
         if (_recalcQueued)
@@ -387,6 +412,9 @@ public static class DlFunctions
         }
     }
 
+    /// <summary>
+    /// Returns a snapshot of training state for a given model.
+    /// </summary>
     [ExcelFunction(Name = "DL.STATUS", Description = "Show training status for a model", IsVolatile = true)]
     public static object Status(string model_id)
     {
@@ -404,6 +432,9 @@ public static class DlFunctions
         };
     }
 
+    /// <summary>
+    /// Trains the specified model asynchronously using provided feature and label ranges.
+    /// </summary>
     [ExcelFunction(Name = "DL.TRAIN", Description = "Train a model (triggered) and return summary")]
     public static object Train(string model_id, object[,] X, object[,] y, string opts, object trigger)
     {
@@ -557,6 +588,9 @@ public static class DlFunctions
         });
     }
 
+    /// <summary>
+    /// Returns epoch/loss pairs recorded during the last training run.
+    /// </summary>
     [ExcelFunction(Name = "DL.LOSS_HISTORY", Description = "Spill epoch/loss history for a model", IsVolatile = true)]
     public static object LossHistory(string model_id)
     {
@@ -579,6 +613,9 @@ public static class DlFunctions
         return output;
     }
 
+    /// <summary>
+    /// Runs inference for the given feature range and returns outputs as a spilled array.
+    /// </summary>
     [ExcelFunction(Name = "DL.PREDICT", Description = "Predict outputs for X (spilled)")]
     public static object Predict(string model_id, object[,] X)
     {
@@ -610,6 +647,9 @@ public static class DlFunctions
         }
     }
 
+    /// <summary>
+    /// Returns a snapshot of weights for the specified layer as a spilled matrix.
+    /// </summary>
     [ExcelFunction(Name = "DL.WEIGHTS", Description = "Inspect weights for a layer (spilled)", IsVolatile = true)]
     public static object Weights(string model_id, object layer)
     {
@@ -626,6 +666,9 @@ public static class DlFunctions
         return BuildWeightMatrix(snapshot.Weight, snapshot.Bias);
     }
 
+    /// <summary>
+    /// Returns a snapshot of gradients for the specified layer as a spilled matrix.
+    /// </summary>
     [ExcelFunction(Name = "DL.GRADS", Description = "Inspect gradients for a layer (spilled)", IsVolatile = true)]
     public static object Grads(string model_id, object layer)
     {
@@ -642,6 +685,9 @@ public static class DlFunctions
         return BuildWeightMatrix(snapshot.Weight, snapshot.Bias);
     }
 
+    /// <summary>
+    /// Runs a forward pass to capture activations for a given layer and feature set.
+    /// </summary>
     [ExcelFunction(Name = "DL.ACTIVATIONS", Description = "Inspect activations for a layer given X (spilled)", IsVolatile = true)]
     public static object Activations(string model_id, object[,] X, object layer)
     {
@@ -677,6 +723,9 @@ public static class DlFunctions
         }
     }
 
+    /// <summary>
+    /// Parses an integer option from the opts string, returning a default when absent.
+    /// </summary>
     private static int ParseIntOpt(string opts, string key, int defaultValue)
     {
         if (string.IsNullOrWhiteSpace(opts)) return defaultValue;
@@ -693,6 +742,9 @@ public static class DlFunctions
         return defaultValue;
     }
 
+    /// <summary>
+    /// Parses a double option from the opts string, returning a default when absent.
+    /// </summary>
     private static double ParseDoubleOpt(string opts, string key, double defaultValue)
     {
         if (string.IsNullOrWhiteSpace(opts)) return defaultValue;
@@ -709,6 +761,9 @@ public static class DlFunctions
         return defaultValue;
     }
 
+    /// <summary>
+    /// Parses a string option from the opts string, returning a default when absent.
+    /// </summary>
     private static string ParseStringOpt(string opts, string key, string defaultValue)
     {
         if (string.IsNullOrWhiteSpace(opts)) return defaultValue;
@@ -724,6 +779,9 @@ public static class DlFunctions
         return defaultValue;
     }
 
+    /// <summary>
+    /// Parses a boolean option from the opts string, returning a default when absent.
+    /// </summary>
     private static bool ParseBoolOpt(string opts, string key, bool defaultValue)
     {
         if (string.IsNullOrWhiteSpace(opts)) return defaultValue;
@@ -743,6 +801,9 @@ public static class DlFunctions
         return defaultValue;
     }
 
+    /// <summary>
+    /// Builds a Torch tensor from a 2D Excel range, validating expected column count.
+    /// </summary>
     private static Tensor BuildTensorFromRange(object[,] values, int expectedCols, string label)
     {
         if (values == null)
@@ -792,6 +853,9 @@ public static class DlFunctions
         return torch.tensor(data, new long[] { rows, cols }, dtype: ScalarType.Float32);
     }
 
+    /// <summary>
+    /// Resolves a layer name from index or name input, validating against model layers.
+    /// </summary>
     private static string ResolveLayerName(DlModelState model, object layer, bool requireWeightedLayer, out string error)
     {
         error = null;
@@ -846,6 +910,9 @@ public static class DlFunctions
         return null;
     }
 
+    /// <summary>
+    /// Enumerates child layers optionally filtering to weighted layers only.
+    /// </summary>
     private static List<string> GetLayerNames(DlModelState model, bool requireWeightedLayer)
     {
         var names = new List<string>();
@@ -863,10 +930,13 @@ public static class DlFunctions
         return names;
     }
 
+    /// <summary>
+    /// Runs a forward pass capturing intermediate activations for each named child layer.
+    /// </summary>
     private static Dictionary<string, Tensor> RunForwardActivations(DlModelState model, Tensor xTensor)
     {
         var activations = new Dictionary<string, Tensor>(StringComparer.OrdinalIgnoreCase);
-        var intermediates = new List<Tensor>();
+        var intermediates = new System.Collections.Generic.List<Tensor>();
         var current = xTensor;
 
         foreach (var layer in model.TorchModel.named_children())
@@ -885,6 +955,9 @@ public static class DlFunctions
         return activations;
     }
 
+    /// <summary>
+    /// Converts a Torch tensor into a 2D object array suitable for spilling into Excel.
+    /// </summary>
     private static object TensorToObjectArray(Tensor tensor)
     {
         var shape = tensor.shape;
@@ -920,6 +993,9 @@ public static class DlFunctions
         return output;
     }
 
+    /// <summary>
+    /// Formats weight and bias tensors into a readable matrix with headers for Excel.
+    /// </summary>
     private static object BuildWeightMatrix(Tensor weight, Tensor bias)
     {
         if (ReferenceEquals(weight, null))
@@ -965,6 +1041,9 @@ public static class DlFunctions
         return output;
     }
 
+    /// <summary>
+    /// Normalizes Excel scalars and single-cell ranges to a plain object for comparison.
+    /// </summary>
     private static object NormalizeScalar(object value)
     {
         if (value is ExcelReference xref)
@@ -982,6 +1061,9 @@ public static class DlFunctions
         return value;
     }
 
+    /// <summary>
+    /// Normalizes a trigger value (including references) into a string token for change detection.
+    /// </summary>
     private static string TriggerKey(object trigger)
     {
         if (trigger == null) return "<null>";
@@ -1003,6 +1085,9 @@ public static class DlFunctions
     [ExcelFunction(Name = "DL.TRIGGER_KEY", Description = "Debug: show normalized trigger key")]
     public static string TriggerKeyDebug(object trigger) => TriggerKey(trigger);
 
+    /// <summary>
+    /// Builds the default two-layer MLP used for quick-start scenarios.
+    /// </summary>
     private static torch.nn.Module BuildDefaultMlp(int input, int hidden, int output)
     {
         return torch.nn.Sequential(
@@ -1012,6 +1097,9 @@ public static class DlFunctions
         );
     }
 
+    /// <summary>
+    /// Creates an optimizer for the model based on current settings.
+    /// </summary>
     private static torch.optim.Optimizer CreateOptimizer(DlModelState model)
     {
         var optimizerName = model.OptimizerName ?? "adam";
@@ -1023,6 +1111,9 @@ public static class DlFunctions
         return torch.optim.Adam(model.TorchModel.parameters(), lr: model.LearningRate);
     }
 
+    /// <summary>
+    /// Adds a file to a zip archive with the specified entry name.
+    /// </summary>
     private static void AddFileToArchive(ZipArchive archive, string sourcePath, string entryName)
     {
         var entry = archive.CreateEntry(entryName);
@@ -1033,6 +1124,9 @@ public static class DlFunctions
         }
     }
 
+    /// <summary>
+    /// Writes model metadata to disk as JSON.
+    /// </summary>
     private static void WriteMetadata(string path, DlModelPersistence meta)
     {
         var serializer = new DataContractJsonSerializer(typeof(DlModelPersistence));
@@ -1042,14 +1136,21 @@ public static class DlFunctions
         }
     }
 
+    /// <summary>
+    /// Reads model metadata from a stream.
+    /// </summary>
     private static DlModelPersistence ReadMetadata(Stream stream)
     {
         var serializer = new DataContractJsonSerializer(typeof(DlModelPersistence));
         return (DlModelPersistence)serializer.ReadObject(stream);
     }
 
+    /// <summary>
+    /// Saves a Torch state dictionary to disk using the available torch.save overload.
+    /// </summary>
     private static void SaveStateDict(IDictionary<string, Tensor> stateDict, string path)
     {
+        // TorchSharp 0.105 exposes torch.save for Tensor; use reflection to keep dictionary support if available.
         var saveMethod = typeof(torch).GetMethods(BindingFlags.Public | BindingFlags.Static)
             .FirstOrDefault(m => m.Name == "save" && m.GetParameters().Length == 2);
 
@@ -1063,6 +1164,9 @@ public static class DlFunctions
         }
     }
 
+    /// <summary>
+    /// Appends a log line to the add-in log file; failures are swallowed to keep UDFs safe.
+    /// </summary>
     private static void Log(string message)
     {
         try

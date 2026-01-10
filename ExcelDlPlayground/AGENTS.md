@@ -7,7 +7,7 @@
 2) `dotnet restore ExcelDlPlayground/ExcelDlPlayground.csproj -r win-x64`
 3) `dotnet build ExcelDlPlayground/ExcelDlPlayground.csproj -c Debug`
 4) Load `bin\Debug\net48\ExcelDlPlayground-AddIn64.xll` in 64-bit Excel (or F5 in VS; Debug settings already point to EXCEL.EXE).
-5) Verify natives present in `bin\Debug\net48`: `torch_cpu.dll`, `LibTorchSharp.dll` (copied by `CopyTorchNativeBinaries`).
+5) Verify natives in `bin\Debug\net48`: `torch_cpu.dll`, `LibTorchSharp.dll` (copied by `CopyTorchNativeBinaries`).
 6) In Excel run `=DL.TORCH_TEST_DETAIL()` → should return “torch ok: …”.
 7) Ensure Excel is fully closed before rebuilding (XLL locking will break pack/copy).
 
@@ -19,18 +19,15 @@
 - Assemblies referenced: `System.IO.Compression`, `Microsoft.CSharp`
 
 ### TorchSharp gotchas (solved)
-- Both `torch_cpu.dll` and `LibTorchSharp.dll` must sit beside `TorchSharp.dll` in output.
-- csproj `CopyTorchNativeBinaries` globs natives from:
-  - `$(PkgLibtorch_cpu_win_x64)\runtimes\win-x64\native\*.dll`
-  - `$(PkgTorchSharp_cpu)\runtimes\win-x64\native\*.dll`
-  - `$(PkgTorchSharp)\runtimes\win-x64\native\*.dll`
-- `EnsureTorch()` sets PATH + TORCHSHARP_HOME to output folder, preloads `LibTorchSharp.dll` then `torch_cpu.dll` via LoadLibrary.
-- TorchSharp calls use `dynamic` for `forward`/`load_state_dict`; **Microsoft.CSharp** reference is required to avoid CS0656.
-- Save/load uses reflection-based `torch.save` for state dicts (TorchSharp 0.105 only exposes Tensor overload).
+- `torch_cpu.dll` and `LibTorchSharp.dll` must sit beside `TorchSharp.dll` in output.
+- `CopyTorchNativeBinaries` globs natives from libtorch-cpu-win-x64, torchsharp-cpu, torchsharp runtimes.
+- `EnsureTorch()` sets PATH + TORCHSHARP_HOME and preloads `LibTorchSharp.dll` then `torch_cpu.dll` via LoadLibrary.
+- Dynamic TorchSharp calls use `dynamic`; **Microsoft.CSharp** reference required to avoid CS0656.
+- Save/load uses reflection-based `torch.save` for state dicts (Tensor overload only exposed in 0.105).
 
 ### Trigger/no-op behavior
-- `DL.TRAIN` skips when `trigger` unchanged; returns array with `skipped`/`last`/`curr`.
-- To retrain: change trigger cell (Z1) and recalc; `AA1: =DL.TRIGGER_KEY($Z$1)` must change.
+- `DL.TRAIN` skips when `trigger` unchanged; returns `skipped`/`last`/`curr`.
+- To retrain: change trigger cell (e.g., Z1) and recalc; `AA1: =DL.TRIGGER_KEY($Z$1)` must change.
 
 ### Core worksheet repro
 - E2: `=DL.MODEL_CREATE("mlp:in=2,hidden=8,out=1")`
@@ -43,14 +40,14 @@
 - Save/Load: `=DL.SAVE(E2, "C:\\Temp\\xor.dlzip")`, `=DL.LOAD("C:\\Temp\\xor.dlzip")`
 
 ### Debug helpers
-- Torch: `DL.TORCH_TEST`, `DL.TORCH_TEST_DETAIL`, `DL.TORCH_NATIVE_CHECK` (reports missing native DLLs)
+- Torch: `DL.TORCH_TEST`, `DL.TORCH_TEST_DETAIL`, `DL.TORCH_NATIVE_CHECK`
 - Logging: `DL.LOG_PATH`, `DL.LOG_WRITE_TEST`; log at `bin\Debug\net48\ExcelDlPlayground.log` (fallback `%TEMP%`).
 
 ### Solution/config gotcha
-- Solution previously referenced non-existent configs. Ensure solution uses `Debug|Any CPU` / `Release|Any CPU` (remove x64 rows) in Configuration Manager.
+- Ensure solution configs use `Debug|Any CPU` / `Release|Any CPU` (remove stray x64 mappings).
 
 ### Build/launch notes
-- VS Debug: StartProgram set to `EXCEL.EXE` with args `"$(TargetDir)ExcelDlPlayground-AddIn64.xll"`; packing skipped in Debug.
+- VS Debug: StartProgram = `EXCEL.EXE` with args `"$(TargetDir)ExcelDlPlayground-AddIn64.xll"`; packing skipped in Debug.
 - If ExcelDnaPack fails due to locked XLL, close Excel and rebuild.
 
 ### Current State (Important)
@@ -58,20 +55,20 @@
 - Trigger guard works (returns skipped when trigger unchanged).
 - Native copy + preload resolves `TypeInitializationException`.
 - Dynamic forward requires Microsoft.CSharp; missing reference causes CS0656.
-- **Refresh behavior:** during training, each epoch queues a throttled `xlcCalculateNow` via `QueueRecalcOnce` (coalesces if a recalc is already queued). Completion also queues a recalc. STATUS/LOSS_HISTORY/WEIGHTS/GRADS/ACTIVATIONS are volatile and refresh on these per-epoch/completion recalcs. Workbook-wide recalc is intentionally avoided (previously crashed Excel).
+- **Refresh behavior:** each epoch queues a throttled `xlcCalculateNow` via `QueueRecalcOnce`; completion also queues one. Workbook-wide recalc is avoided (previously crashed Excel). STATUS/LOSS_HISTORY/WEIGHTS/GRADS/ACTIVATIONS are volatile and refresh on these recalcs.
 
 ### Do NOT try (known pitfalls)
-- **Loading 32-bit Excel / x86**: TorchSharp native binaries here are win-x64 only; 32-bit Excel will fail to load natives.
-- **Relying on `C:\nuget` global cache**: locked files prevented native downloads; we force `%USERPROFILE%\.nuget\packages` instead.
-- **Skipping `EnsureTorch()` preload**: TorchSharp may not find `LibTorchSharp.dll`/`torch_cpu.dll` even if present; preload sets PATH/TORCHSHARP_HOME and LoadLibrary order.
-- **Trigger-based training without changing trigger cell**: `DL.TRAIN` will intentionally return `skipped` if trigger unchanged.
-- **Using Debug config with x64 solution mappings that don’t exist**: leads to “project configuration does not exist” warnings; use Any CPU configs as documented.
-- **Expecting GPU**: this build is CPU-only (libtorch-cpu-win-x64).
-- **Forcing workbook-wide recalcs on training completion**: previously caused Excel crash; rely on per-epoch/completion throttled `xlcCalculateNow` instead.
+- Loading 32-bit Excel / x86 (natives are win-x64 only).
+- Relying on `C:\nuget` global cache (locked files); use `%USERPROFILE%\.nuget\packages`.
+- Skipping `EnsureTorch()` preload (PATH/TORCHSHARP_HOME + LoadLibrary ordering matters).
+- Trigger-based training without changing trigger cell (TRAIN will return `skipped`).
+- Using Debug configs with non-existent x64 mappings (fix in Configuration Manager).
+- Expecting GPU (CPU-only build).
+- Forcing workbook-wide recalc; rely on throttled `xlcCalculateNow`.
 
 ### Notes / Known Past Issues
-- Missing libtorch natives caused `TypeInitializationException`; fixed via copy glob + preload.
-- CS0656 from dynamic TorchSharp calls is fixed by referencing Microsoft.CSharp.
+- Missing libtorch natives caused `TypeInitializationException`; fixed via copy + preload.
+- CS0656 from dynamic TorchSharp calls fixed by Microsoft.CSharp reference.
 
 ### Next steps
 - Harden error messages for malformed ranges.
