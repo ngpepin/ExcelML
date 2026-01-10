@@ -4,6 +4,7 @@
     <Platform Name="x64" />
   </Configurations>
   <Folder Name="/Solution Items/">
+    <File Path="Example01-Background.pdf" />
     <File Path="Example01.md" />
     <File Path="Example01.pdf" />
     <File Path="Example01.xlsx" />
