@@ -48,7 +48,7 @@ Examples:
 
 **Pattern**
 
-* Caller-scoped cache (keyed by caller cell)
+* Caller-scoped cache (keyed by caller cell + trigger)
 * Optional trigger to force regeneration
 * Session-stable identity when needed
 
@@ -89,7 +89,7 @@ Examples:
 
 * `ExcelAsyncUtil.Observe`
 * Central publish hub (`DlProgressHub`)
-* Per-observable caching
+* Per-observable caching (Predict keeps last good result; refreshes on publish; X edits change the range key)
 * Push only on meaningful state transitions
 
 * * *
@@ -175,7 +175,8 @@ public static string SessionId() => _sessionId;
 
 ### Usage
 
-`=DL.MODEL_CREATE("xor:in=2,hidden=8,out=1", DL.SESSION_ID())`
+`=DL.MODEL_CREATE("xor:in=2,hidden=8,out=1", DL.SESSION_ID())`  
+(Second parameter is optional trigger; same caller + same trigger reuses the cached model id.)
 
 ### Behavior
 
@@ -206,7 +207,7 @@ E4: =DL.TRAIN(E2, A2:B4, C2:C4, "epochs=200", Z1)
 E8: =DL.LOSS_HISTORY(E2)
 E20:=DL.STATUS(E2)
 
-G2: =DL.PREDICT(E2, A2:B4)
+G2: =DL.PREDICT(E2, A2:B4)   (push-based, cached until training completes or X changes)
 ```
 
 * * *
@@ -240,7 +241,7 @@ G2: =DL.PREDICT(E2, A2:B4)
 
 * `DL.STATUS`
 * `DL.LOSS_HISTORY`
-* `DL.PREDICT`
+* `DL.PREDICT` (refreshes cached prediction on publish; uses range key to rebuild when X edits)
 
 ### Publishing cadence
 
@@ -271,7 +272,7 @@ G2: =DL.PREDICT(E2, A2:B4)
 ### Correct patterns
 
 * `TrainLock.WaitAsync()` inside `RunTask`
-* `TrainLock.Wait(0)` for prediction
+* `TrainLock.Wait(0)` for prediction (returns cached result if busy)
 * Cached fallback if lock unavailable
 
 * * *
@@ -290,8 +291,8 @@ G2: =DL.PREDICT(E2, A2:B4)
 ### ✅ Proven to work
 
 * Observable-based UI updates
-* Session-scoped model identity
-* Cached predictions
+* Session-scoped model identity (caller + trigger cache)
+* Cached predictions with push refresh
 * Trigger-guarded training
 * Throttled recalculation
 
