@@ -3,6 +3,9 @@
     <Platform Name="Any CPU" />
     <Platform Name="x64" />
   </Configurations>
+  <Folder Name="/Solution Items/">
+    <File Path="Example01.xlsx" />
+  </Folder>
   <Project Path="ExcelDlPlayground/ExcelDlPlayground.csproj">
     <Platform Solution="*|x64" Project="x64" />
   </Project>
