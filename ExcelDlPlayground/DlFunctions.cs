@@ -42,7 +42,7 @@ public static class DlFunctions
         var baseDir = GetTorchBaseDir();
 
         var path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-        if (!path.Split(';').Any(p => string.Equals(p, baseDir, StringComparison.OrdinalIgnoreCase)));
+        if (!path.Split(';').Any(p => string.Equals(p, baseDir, StringComparison.OrdinalIgnoreCase)))
         {
             Environment.SetEnvironmentVariable("PATH", baseDir + ";" + path);
         }
@@ -356,8 +356,7 @@ public static class DlFunctions
     {
         if (_recalcQueued)
         {
-            if (force)
-                _recalcPending = true;
+            _recalcPending = true; // coalesce concurrent requests (progress or forced)
             return;
         }
 
