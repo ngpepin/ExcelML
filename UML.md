@@ -20,6 +20,7 @@ component "Excel-DNA Add-in" as AddIn {
   [Functions]
   [AsyncFunctions]
   [DlFunctions]
+  [DlProgressHub]
 }
 
 package "DL Core" {
@@ -37,6 +38,7 @@ node "File System" as FS
 [Functions] --> AddIn : Utility UDFs
 [AsyncFunctions] --> AddIn : Async UDF wrapper
 [DlFunctions] --> [DlRegistry] : create/load/save/get model state
+[DlFunctions] --> [DlProgressHub] : publish/subscribe progress
 [DlFunctions] --> TorchSharp : tensors, autograd, optimizers
 [DlFunctions] --> FS : save/load model packages (.dlzip)
 [DlRegistry] o-- [DlModelState] : manages instances
@@ -63,13 +65,17 @@ class DlFunctions {
   - EnsureTorch()
   - GetTorchBaseDir()
   - GetMissingTorchNativeFiles(baseDir)
+  .. Observables ..
+  + Status(model_id)
+  + LossHistory(model_id)
+  - BuildStatus(model_id)
+  - BuildLossTable(model_id)
+  - QueueRecalcOnce(reason, force)
   .. Public UDFs ..
   + ModelCreate(description)
   + Save(model_id, path)
   + Load(path)
-  + Status(model_id)
   + Train(model_id, X, y, opts, trigger)
-  + LossHistory(model_id)
   + Predict(model_id, X)
   + Weights(model_id, layer)
   + Grads(model_id, layer)
@@ -89,6 +95,12 @@ class DlFunctions {
   - CreateOptimizer(model)
   - SaveStateDict(dict, path)
   - Log(message)
+}
+
+class DlProgressHub {
+  - ConcurrentDictionary<string, HashSet<IExcelObserver>> _subs
+  + Subscribe(modelId, observer)
+  + Publish(modelId)
 }
 
 class DlRegistry {
@@ -129,28 +141,13 @@ class LayerTensorSnapshot {
   + Dispose()
 }
 
-class Functions {
-  + SayHello(name)
-  + MatMul(a, b)
-}
-
-class AsyncFunctions {
-  + WaitAsync(ms)
-}
-
-class AddInStartup {
-  + AutoOpen()
-  + AutoClose()
-}
-
-class DlRibbon {
-  + GetCustomUI(ribbonId)
-  + OnLoad(ribbonUi)
-  + OnHelloClick(control)
-  + OnInvalidateClick(control)
-}
+class Functions { + SayHello(name) + MatMul(a, b) }
+class AsyncFunctions { + WaitAsync(ms) }
+class AddInStartup { + AutoOpen() + AutoClose() }
+class DlRibbon { + GetCustomUI(ribbonId) + OnLoad(ribbonUi) + OnHelloClick(control) + OnInvalidateClick(control) }
 
 DlFunctions --> DlRegistry
+DlFunctions --> DlProgressHub : publish / subscribe
 DlRegistry o-- DlModelState
 DlModelState o-- LayerTensorSnapshot
 DlFunctions --> "TorchSharp\n(torch, tensors, optimizers)" : uses
@@ -175,6 +172,7 @@ participant Excel
 participant "DlFunctions.Train" as Train
 participant DlRegistry
 participant DlModelState as Model
+participant DlProgressHub as Hub
 participant TorchSharp
 
 User -> Excel : Change trigger cell
@@ -183,14 +181,16 @@ Train -> DlRegistry : TryGet(model_id)
 Train -> Model : TrainLock.WaitAsync()
 Train -> TorchSharp : EnsureTorch()
 Train -> TorchSharp : Build tensors (X,y)
+Train -> Hub : Publish(start)
 loop epochs
   Train -> TorchSharp : forward(x)
   Train -> TorchSharp : loss(output, y)
   Train -> TorchSharp : backward()
   Train -> TorchSharp : optimizer.step()
   Train -> Model : UpdateGradSnapshot()
+  Train -> Hub : Publish(progress) **every 5 epochs + first**
 end
 Train -> Model : UpdateWeightSnapshot(); LastTriggerKey=trigger
+Train -> Hub : Publish(final)
 Train -> Excel : return {status=done, epochs, final_loss}
 @enduml
-```

@@ -9,6 +9,10 @@ internal static class DlProgressHub
     private static readonly ConcurrentDictionary<string, HashSet<IExcelObserver>> _subs =
         new ConcurrentDictionary<string, HashSet<IExcelObserver>>(StringComparer.OrdinalIgnoreCase);
 
+    // modelId -> queued flag (prevents flooding Excel with macros)
+    private static readonly ConcurrentDictionary<string, byte> _pending =
+        new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+
     public static IDisposable Subscribe(string modelId, IExcelObserver observer)
     {
         var set = _subs.GetOrAdd(modelId, _ => new HashSet<IExcelObserver>());
@@ -23,17 +27,47 @@ internal static class DlProgressHub
         });
     }
 
+    /// <summary>
+    /// Publish an update to all observers of modelId.
+    /// IMPORTANT: This marshals callbacks onto Excel's main thread.
+    /// </summary>
     public static void Publish(string modelId)
     {
-        if (!_subs.TryGetValue(modelId, out var set)) return;
+        if (string.IsNullOrWhiteSpace(modelId))
+            return;
 
-        IExcelObserver[] observers;
-        lock (set) observers = new List<IExcelObserver>(set).ToArray();
+        // Coalesce: if already queued, don't queue again.
+        if (!_pending.TryAdd(modelId, 0))
+            return;
 
-        foreach (var obs in observers)
+        ExcelAsyncUtil.QueueAsMacro(() =>
         {
-            try { obs.OnNext(modelId); } catch { }
-        }
+            try
+            {
+                if (!_subs.TryGetValue(modelId, out var set))
+                    return;
+
+                IExcelObserver[] observers;
+                lock (set) observers = new List<IExcelObserver>(set).ToArray();
+
+                foreach (var obs in observers)
+                {
+                    try
+                    {
+                        // value payload doesn't matter for your WrappedObserver pattern
+                        obs.OnNext(modelId);
+                    }
+                    catch
+                    {
+                        // swallow to keep Excel stable
+                    }
+                }
+            }
+            finally
+            {
+                _pending.TryRemove(modelId, out _);
+            }
+        });
     }
 
     private sealed class ActionDisposable : IDisposable
@@ -41,6 +75,7 @@ internal static class DlProgressHub
         private readonly Action _dispose;
         private bool _done;
         public ActionDisposable(Action dispose) => _dispose = dispose;
+
         public void Dispose()
         {
             if (_done) return;

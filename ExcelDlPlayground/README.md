@@ -1,6 +1,6 @@
 # ExcelDlPlayground — Excel-DNA net48 scaffold for DL-in-Excel
 
-This project is a **net48 Excel-DNA** add-in that brings small TorchSharp models into Excel via UDFs. It uses dynamic arrays (spill), async training to keep Excel responsive, and an in-process model registry.
+This project is a **net48 Excel-DNA** add-in that brings small TorchSharp models into Excel via UDFs. It uses dynamic arrays (spill), async training to keep Excel responsive, and an in-process model registry with observable progress updates.
 
 ## Environment
 - Excel: Microsoft 365 (64-bit)
@@ -11,9 +11,10 @@ This project is a **net48 Excel-DNA** add-in that brings small TorchSharp models
 
 ## What’s implemented
 - `DL.MODEL_CREATE(description)` → model_id (default MLP: Linear → Tanh → Linear)
-- `DL.TRAIN(model_id, X, y, opts, trigger)` → training summary (async, trigger guard, recalc throttled per epoch/completion)
+- `DL.TRAIN(model_id, X, y, opts, trigger)` → training summary (async, trigger guard, periodic progress publish)
   - opts: `epochs`, `lr`, `optim=adam|sgd`, `reset=true`
-- `DL.LOSS_HISTORY(model_id)` → {epoch, loss}
+- `DL.STATUS(model_id)` → observable training status (updates on publish)
+- `DL.LOSS_HISTORY(model_id)` → observable loss table (updates on publish)
 - `DL.PREDICT(model_id, X)` → logits
 - Inspection: `DL.WEIGHTS`, `DL.GRADS`, `DL.ACTIVATIONS`
 - Persistence: `DL.SAVE(model_id, path)`, `DL.LOAD(path)` (.dlzip contains model.pt + metadata.json)
@@ -29,7 +30,7 @@ C2:C4 = y (3x1)
 2) `E2: =DL.MODEL_CREATE("mlp:in=2,hidden=8,out=1")`
 3) Trigger cell `Z1` (change to retrain); optional `AA1: =DL.TRIGGER_KEY($Z$1)`
 4) Train `E4: =DL.TRAIN(E2, A2:B4, C2:C4, "epochs=20", $Z$1)`
-5) Loss history `E8: =DL.LOSS_HISTORY(E2)`
+5) Status/loss (auto-refresh): `E6: =DL.STATUS(E2)` and `E8: =DL.LOSS_HISTORY(E2)`
 6) Predict `=DL.PREDICT(E2, A2:B4)`
 7) Inspect `=DL.WEIGHTS(E2,1)`, `=DL.GRADS(E2,1)`, `=DL.ACTIVATIONS(E2,A2:B4,1)`
 8) Save/load `=DL.SAVE(E2, "C:\\Temp\\xor.dlzip")`, `=DL.LOAD("C:\\Temp\\xor.dlzip")`
@@ -47,8 +48,9 @@ C2:C4 = y (3x1)
 
 ## Behaviors / gotchas
 - Trigger guard: training skipped if trigger unchanged.
-- Recalc: each epoch/completion queues a throttled `xlcCalculateNow`; workbook-wide recalc is intentionally avoided (past crashes).
-- Volatile inspectors: STATUS/LOSS_HISTORY/WEIGHTS/GRADS/ACTIVATIONS refresh on recalcs.
+- Progress: `DlProgressHub.Publish` drives STATUS/LOSS_HISTORY updates (start, epoch 1, every 5 epochs, final).
+- Recalc: training completion queues a throttled `xlcCalculateNow`; workbook-wide recalc is intentionally avoided (past crashes).
+- Volatile inspectors (WEIGHTS/GRADS/ACTIVATIONS) refresh on recalc.
 - CPU-only; 32-bit Excel not supported.
 
 ## Next milestones
@@ -59,5 +61,6 @@ C2:C4 = y (3x1)
 ## Design principles
 - Range-in / spill-out UDFs (batch-oriented)
 - Explicit, triggered training
+- Observability for teaching (status/loss via observables)
 - No COM calls from background threads
 - Simple in-process add-in (no VSTO)

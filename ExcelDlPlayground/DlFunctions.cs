@@ -673,35 +673,170 @@ public static class DlFunctions
 
     /// <summary>
     /// Runs inference for the given feature range and returns outputs as a spilled array.
+    /// Updates automatically when training completes (push-based, cached).
     /// </summary>
     [ExcelFunction(Name = "DL.PREDICT", Description = "Predict outputs for X (spilled)")]
     public static object Predict(string model_id, object[,] X)
     {
-        if (!DlRegistry.TryGet(model_id, out var model))
-            return "#MODEL! Unknown model_id";
+        // Important:
+        // - Excel-DNA caches observables by (function name, parameters key).
+        // - Passing the raw X array as a key can be problematic (reference identity).
+        // - Instead, pass a cheap stable "X key" so editing X causes a new observable instance.
+        //
+        // If you want the observable to refresh only on training completion (not on X edits),
+        // you can remove xKey from the key list.
+        var xKey = RangeKey(X);
 
-        if (model.TorchModel == null)
-            return "#ERR: model not initialized. Call DL.MODEL_CREATE first.";
+        return ExcelAsyncUtil.Observe(
+            "DL.PREDICT",
+            new object[] { model_id, xKey },
+            () => new PredictObservable(model_id, X)
+        );
+    }
 
-        EnsureTorch();
+    private sealed class PredictObservable : IExcelObservable
+    {
+        private readonly string _modelId;
+        private readonly object[,] _x;
 
-        model.TrainLock.Wait();
-        try
+        // Use long so we never trip on "long to int" mismatches.
+        private long _lastVersion = -1;
+
+        // Cache last good result to avoid flicker / #N/A.
+        private object _lastResult = new object[,] { { "empty", "no prediction yet" } };
+
+        public PredictObservable(string modelId, object[,] x)
         {
-            using (var xTensor = BuildTensorFromRange(X, model.InputDim, "X"))
-            using (torch.no_grad())
+            _modelId = modelId;
+            _x = x;
+        }
+
+        public IDisposable Subscribe(IExcelObserver observer)
+        {
+            // Initial push
+            observer.OnNext(ComputeOrGetCached());
+
+            // Whenever training publishes progress/completion, re-emit
+            return DlProgressHub.Subscribe(_modelId, new Observer(observer, this));
+        }
+
+        private object ComputeOrGetCached()
+        {
+            if (!DlRegistry.TryGet(_modelId, out var model))
+                return "#MODEL! Unknown model_id";
+
+            // While training, keep returning last stable prediction (no flicker).
+            if (model.IsTraining)
+                return _lastResult;
+
+            // If model hasn't changed since we last computed, return cached result.
+            // NOTE: TrainingVersion should increase when a new training run starts.
+            // We will treat "new version AND not training" as "a run completed".
+            if ((long)model.TrainingVersion == _lastVersion)
+                return _lastResult;
+
+            // Try compute without blocking Excel.
+            var computed = ComputePredictionNonBlocking(model, _x);
+
+            // If we couldn't acquire the lock immediately (rare timing window),
+            // keep cached result and schedule a retry publish on the UI thread.
+            if (computed == null)
             {
-                model.TorchModel.eval();
-                using (var output = (Tensor)((dynamic)model.TorchModel).forward(xTensor))
-                using (var outputCpu = output.detach().cpu())
+                ExcelAsyncUtil.QueueAsMacro(() => DlProgressHub.Publish(_modelId));
+                return _lastResult;
+            }
+
+            // Success — update cache and version marker.
+            _lastResult = computed;
+            _lastVersion = (long)model.TrainingVersion;
+            return _lastResult;
+        }
+
+        private static object ComputePredictionNonBlocking(DlModelState model, object[,] X)
+        {
+            if (model.TorchModel == null)
+                return "#ERR: model not initialized. Call DL.MODEL_CREATE first.";
+
+            EnsureTorch();
+
+            // Never block Excel’s UI thread (and observers typically run on UI thread).
+            // If training still holds the lock, return null => caller uses cached result.
+            if (!model.TrainLock.Wait(0))
+                return null;
+
+            try
+            {
+                using (var xTensor = BuildTensorFromRange(X, model.InputDim, "X"))
+                using (torch.no_grad())
                 {
-                    return TensorToObjectArray(outputCpu);
+                    model.TorchModel.eval();
+                    using (var output = (Tensor)((dynamic)model.TorchModel).forward(xTensor))
+                    using (var outputCpu = output.detach().cpu())
+                    {
+                        return TensorToObjectArray(outputCpu);
+                    }
                 }
             }
+            finally
+            {
+                model.TrainLock.Release();
+            }
         }
-        finally
+
+        private sealed class Observer : IExcelObserver
         {
-            model.TrainLock.Release();
+            private readonly IExcelObserver _inner;
+            private readonly PredictObservable _parent;
+
+            public Observer(IExcelObserver inner, PredictObservable parent)
+            {
+                _inner = inner;
+                _parent = parent;
+            }
+
+            public void OnNext(object value) => _inner.OnNext(_parent.ComputeOrGetCached());
+            public void OnError(Exception exception) => _inner.OnError(exception);
+            public void OnCompleted() => _inner.OnCompleted();
+        }
+    }
+
+    /// <summary>
+    /// Build a cheap stable key for a 2D range so that when X changes,
+    /// Excel-DNA creates a new observable instance.
+    /// This avoids relying on object[,] reference identity.
+    /// </summary>
+    private static string RangeKey(object[,] values)
+    {
+        if (values == null) return "<null>";
+
+        int rows = values.GetLength(0);
+        int cols = values.GetLength(1);
+
+        // Hash a small sample + shape (fast, good enough).
+        unchecked
+        {
+            int h = 17;
+            h = h * 31 + rows;
+            h = h * 31 + cols;
+
+            // sample up to first 16 cells to keep it fast
+            int max = Math.Min(rows * cols, 16);
+            for (int i = 0; i < max; i++)
+            {
+                int r = i / cols;
+                int c = i % cols;
+
+                var v = values[r, c];
+                string s;
+
+                if (v == null || v is ExcelEmpty || v is ExcelMissing) s = "";
+                else if (v is double d) s = d.ToString("G6", CultureInfo.InvariantCulture);
+                else s = v.ToString();
+
+                h = h * 31 + (s?.GetHashCode() ?? 0);
+            }
+
+            return $"r{rows}c{cols}:{h}";
         }
     }
 

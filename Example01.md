@@ -236,6 +236,33 @@ Each of these spills a table you can analyze or chart.
 
 ---
 
+## Step 8 — Run predictions (see what the model learned)
+
+Now use the trained model to predict outputs for the XOR inputs.
+
+### 8.1 Choose a cell for predictions
+Pick an empty area, e.g., **G2**.
+
+### 8.2 Enter the prediction formula
+In **cell G2**, type:
+
+```excel
+=DL.PREDICT(E2, A2:B5)
+```
+
+### 8.3 What you should see
+A 4x1 spilled array of logits (real numbers). For XOR, values near 0 mean class 0, values above 0 mean class 1.
+
+### 8.4 Optional: apply a threshold
+If you prefer 0/1, use a helper column:
+
+```excel
+=IF(H2>0,1,0)
+```
+
+Copy this down beside each logit to view the predicted class.
+
+---
 ## What you just did
 
 Without writing code, you:

@@ -34,7 +34,7 @@
 - Z1: set 1 (then 2,3,4…)
 - AA1: `=DL.TRIGGER_KEY($Z$1)`
 - E4: `=DL.TRAIN(E2, A2:B4, C2:C4, "epochs=20", $Z$1)`
-- E8: `=DL.LOSS_HISTORY(E2)`
+- E8: `=DL.LOSS_HISTORY(E2)` (observable; auto-updates on progress)
 - Optional inference: `=DL.PREDICT(E2, A2:B4)`
 - Inspect: `=DL.WEIGHTS(E2,1)` or `=DL.ACTIVATIONS(E2,A2:B4,1)` or `=DL.GRADS(E2,1)` (after training)
 - Save/Load: `=DL.SAVE(E2, "C:\\Temp\\xor.dlzip")`, `=DL.LOAD("C:\\Temp\\xor.dlzip")`
@@ -55,7 +55,8 @@
 - Trigger guard works (returns skipped when trigger unchanged).
 - Native copy + preload resolves `TypeInitializationException`.
 - Dynamic forward requires Microsoft.CSharp; missing reference causes CS0656.
-- **Refresh behavior:** each epoch queues a throttled `xlcCalculateNow` via `QueueRecalcOnce`; completion also queues one. Workbook-wide recalc is avoided (previously crashed Excel). STATUS/LOSS_HISTORY/WEIGHTS/GRADS/ACTIVATIONS are volatile and refresh on these recalcs.
+- **Progress updates:** `DL.STATUS` and `DL.LOSS_HISTORY` are observables. `DlProgressHub.Publish` pushes updates at start, periodically during training (epoch 1, every 5 epochs, final), and on completion; no manual recalc needed for these observers.
+- **Refresh behavior:** training completion queues a throttled `xlcCalculateNow` for volatile inspectors; workbook-wide recalc is avoided (previously crashed Excel).
 
 ### Do NOT try (known pitfalls)
 - Loading 32-bit Excel / x86 (natives are win-x64 only).
@@ -64,7 +65,7 @@
 - Trigger-based training without changing trigger cell (TRAIN will return `skipped`).
 - Using Debug configs with non-existent x64 mappings (fix in Configuration Manager).
 - Expecting GPU (CPU-only build).
-- Forcing workbook-wide recalc; rely on throttled `xlcCalculateNow`.
+- Forcing workbook-wide recalc; rely on throttled `xlcCalculateNow` + observables.
 
 ### Notes / Known Past Issues
 - Missing libtorch natives caused `TypeInitializationException`; fixed via copy + preload.
