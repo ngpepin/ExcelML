@@ -8,6 +8,7 @@
     <File Path="Example01.md" />
     <File Path="Example01.pdf" />
     <File Path="Example01.xlsx" />
+    <File Path="ExcelDNA_Best_Practices_and_Architectural_Patterns_2026.md" />
     <File Path="media/xor-training.gif" />
     <File Path="README.md" />
     <File Path="UML.md" />
@@ -15,4 +16,5 @@
   <Project Path="ExcelDlPlayground/ExcelDlPlayground.csproj">
     <Platform Solution="*|x64" Project="x64" />
   </Project>
+  <Project Path="ExcelLM/ExcelLM.csproj" />
 </Solution>
