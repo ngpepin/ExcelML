@@ -264,8 +264,8 @@ G2: =DL.PREDICT(E2, A2:B4)
 
 ### Why no recalculation storm
 
-* Observers are push-based (no recalculation required)
-* Only volatile inspectors MAY use throttled `xlcCalculateNow` as a fallback
+* Observers are push-based
+* Only volatile inspectors use throttled `xlcCalculateNow`
 * Workbook-wide recalc is **never forced**
 
 * * *
@@ -311,9 +311,8 @@ G2: =DL.PREDICT(E2, A2:B4)
 
 * Workbook-wide recalc loops
 * Blocking `Wait()` on UI thread
-* Calling TrainLock.Wait() inside Observe / OnNext
 * Volatile session IDs
-* Recreating models during recalculation without caller-scoped caching
+* Recreating models in pure UDFs
 * 32-bit Excel
 * GPU expectations (CPU-only)
 
@@ -340,12 +339,6 @@ G2: =DL.PREDICT(E2, A2:B4)
 * Additional optimizers
 * More loss functions
 * Structured examples workbook
-
-* * *
-
-### Architectural invariant
-
-No DL.* function may assume it is called exactly once.
 
 * * *
 
