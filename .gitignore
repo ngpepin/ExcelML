@@ -10,6 +10,8 @@
 *.userosscache
 *.sln.docstates
 ChatGPT_ExcelML.md
+priv/ChatGPT_ExcelML.md
+priv/
 
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
